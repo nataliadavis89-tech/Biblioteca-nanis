@@ -1293,9 +1293,6 @@ function openAdd(){
             placeholder="Título, autor, editorial o pega una URL…"
             autocomplete="off" oninput="smartSearch()" onkeydown="if(event.key==='Enter')smartSearch(true)">
           <div class="smart-search-clear" id="smart-clear" onclick="clearSmartSearch()" style="display:none">✕</div>
-          <div onclick="startBarcodeScanner()" style="width:36px;height:36px;background:var(--gold);border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-left:6px" title="Escanear código de barras">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2"><rect x="3" y="3" width="4" height="18"/><rect x="9" y="3" width="2" height="18"/><rect x="13" y="3" width="4" height="18"/><rect x="19" y="3" width="2" height="18"/></svg>
-          </div>
         </div>
         <div style="font-size:10px;color:var(--text3);margin-top:5px;padding-left:2px">
           También puedes pegar: URL de Alma, Casa del Libro, Goodreads, Amazon, ISBN…
@@ -1806,6 +1803,9 @@ function parseISBNdb(book, results){
   }
 }
 
+
+function escHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 function renderSearchResults(res, results, query, offset, append){
   if(!results || !results.length){
     res.innerHTML = '<div class="smart-empty">Sin resultados para &ldquo;'+escHtml(query)+'&rdquo;<br><small style="opacity:.6">Prueba con título, apellido del autor o ISBN</small></div>';
@@ -1841,8 +1841,6 @@ function renderSearchResults(res, results, query, offset, append){
   res.innerHTML = html;
 }
 
-function escHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function escAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 
 
 
@@ -2296,11 +2294,6 @@ function bulkDelete(){
   renderHome();
 }
 </script>
-
-<!-- ── BARCODE SCANNER MODAL ──────────────────────────────────── -->
-<div id="scanner-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:2000;flex-direction:column;align-items:center;justify-content:center">
-  <div style="position:relative;width:100%;max-width:400px;padding:20px">
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--gold);text-align:center;margin-bottom:16px">ESCANEAR ISBN</div>
     <div style="position:relative;border-radius:12px;overflow:hidden;background:#000">
       <video id="scanner-video" style="width:100%;display:block;border-radius:12px" playsinline></video>
       <!-- Targeting overlay -->
@@ -2318,97 +2311,6 @@ function bulkDelete(){
   </div>
 </div>
 <script>
-// ── BARCODE SCANNER ───────────────────────────────────────────────
-let _scannerActive = false;
-let _scannerStream = null;
-let _scannerInterval = null;
-
-async function startBarcodeScanner(){
-  const modal = document.getElementById('scanner-modal');
-  if(!modal) return;
-  modal.style.display = 'flex';
-  _scannerActive = true;
-  const video = document.getElementById('scanner-video');
-  const status = document.getElementById('scanner-status');
-
-  try{
-    _scannerStream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }
-    });
-    video.srcObject = _scannerStream;
-    await video.play();
-
-    // Try native BarcodeDetector API first (Chrome Android, iOS 17+)
-    if('BarcodeDetector' in window){
-      if(status) status.textContent = '📷 Apunta al código de barras';
-      const detector = new BarcodeDetector({ formats:['ean_13','ean_8','upc_a','code_128'] });
-      _scannerInterval = setInterval(async()=>{
-        if(!_scannerActive){ clearInterval(_scannerInterval); return; }
-        try{
-          const barcodes = await detector.detect(video);
-          for(const bc of barcodes){
-            const isbn = bc.rawValue.replace(/[^0-9X]/gi,'');
-            if(isbn.length >= 10){
-              if(navigator.vibrate) navigator.vibrate([100]);
-              stopBarcodeScanner();
-              _onISBNScanned(isbn);
-              return;
-            }
-          }
-        }catch(e){}
-      }, 250);
-
-    // Fallback: ZXing
-    } else if(typeof ZXing !== 'undefined'){
-      if(status) status.textContent = '📷 Apunta al código de barras';
-      const hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[
-        ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
-        ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.UPC_A
-      ]);
-      const reader = new ZXing.BrowserMultiFormatReader(hints);
-      _scannerInterval = reader;
-      reader.decodeFromVideoDevice(null, 'scanner-video', (result, err)=>{
-        if(!_scannerActive) return;
-        if(result){
-          const isbn = result.getText().replace(/[^0-9X]/gi,'');
-          if(isbn.length >= 10){
-            if(navigator.vibrate) navigator.vibrate([100]);
-            stopBarcodeScanner();
-            _onISBNScanned(isbn);
-          }
-        }
-      });
-    } else {
-      if(status) status.textContent = '⚠️ Escáner no disponible en este dispositivo';
-    }
-
-  }catch(e){
-    if(status) status.textContent = '⚠️ Sin acceso a cámara — actívala en Ajustes del navegador';
-    console.warn('Camera error:', e);
-  }
-}
-
-function _onISBNScanned(isbn){
-  showToast('📚 ISBN detectado: ' + isbn);
-  const sq = document.getElementById('smart-q');
-  if(sq){ sq.value = isbn; sq.dispatchEvent(new Event('input')); }
-  // Trigger search with the ISBN
-  setTimeout(()=>{ smartSearch(true); }, 200);
-}
-
-function stopBarcodeScanner(){
-  _scannerActive = false;
-  if(_scannerInterval){
-    try{ _scannerInterval.reset(); }catch(e){}
-    _scannerInterval = null;
-  }
-  if(_scannerStream){ _scannerStream.getTracks().forEach(t=>t.stop()); _scannerStream = null; }
-  const modal = document.getElementById('scanner-modal');
-  if(modal) modal.style.display = 'none';
-  const video = document.getElementById('scanner-video');
-  if(video){ video.srcObject = null; }
-}
 </script>
 </body>
 </html>
