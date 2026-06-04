@@ -616,7 +616,6 @@ async function loadBooks(){
   if(stored){
     try{
       books = JSON.parse(stored);
-      await injectLocalCovers(books);
       renderHome(); renderLibrary(); renderWishlist();
     }catch(e){}
   }
@@ -628,23 +627,23 @@ async function loadBooks(){
       const remote = await resp.json();
       if(Array.isArray(remote) && remote.length > 0){
         books = remote;
-        // Inject covers BEFORE saving to localStorage
-        await loadAndInjectCovers(books);
-        // Now save WITH covers already injected
-        const forStorage = books.map(b=>({...b}));
-        localStorage.setItem('gl_books_v4', JSON.stringify(forStorage));
+        localStorage.setItem('gl_books_v4', JSON.stringify(books));
         renderHome(); renderLibrary(); renderWishlist();
         return;
       } else if(Array.isArray(remote) && remote.length === 0){
+        // First ever run - push SEED with covers
         if(!books || books.length === 0){
           books = JSON.parse(JSON.stringify(SEED));
+          // Inject COVERS_SEED into books
+          Object.entries(COVERS_SEED).forEach(([id, cover])=>{
+            const b = books.find(x=>x.id===id);
+            if(b) b.cover = cover;
+          });
         }
-        await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)}).catch(()=>{});
-        await fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(COVERS_SEED)}).catch(()=>{});
-        localStorage.setItem('gl_covers_v1', JSON.stringify(COVERS_SEED));
-        await injectLocalCovers(books);
         localStorage.setItem('gl_books_v4', JSON.stringify(books));
         renderHome(); renderLibrary(); renderWishlist();
+        // Push to cloud WITH covers
+        fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)}).catch(()=>{});
         showToast('📚 Biblioteca lista · ' + books.length + ' libros');
         return;
       }
@@ -653,14 +652,18 @@ async function loadBooks(){
     console.warn('Cloud unavailable, using local:', e);
   }
 
-  // No cloud, no local → seed
+  // No cloud, no local - use seed
   if(!books || books.length === 0){
     books = JSON.parse(JSON.stringify(SEED));
+    Object.entries(COVERS_SEED).forEach(([id, cover])=>{
+      const b = books.find(x=>x.id===id);
+      if(b) b.cover = cover;
+    });
     localStorage.setItem('gl_books_v4', JSON.stringify(books));
-    await injectLocalCovers(books);
     renderHome(); renderLibrary(); renderWishlist();
   }
 }
+
 
 
 
@@ -671,7 +674,7 @@ async function injectLocalCovers(bookList){
     const covers = JSON.parse(stored);
     let injected = 0;
     bookList.forEach(b=>{
-      if(b.cover==='__cover__' && covers[b.id]){
+      if((!b.cover||b.cover==='__cover__') && covers[b.id]){
         b.cover = covers[b.id];
         injected++;
       }
@@ -684,7 +687,7 @@ async function injectLocalCovers(bookList){
 
 
 async function loadAndInjectCovers(bookList){
-  const need = bookList.filter(b=>b.cover==='__cover__');
+  const need = bookList.filter(b=>!b.cover||b.cover==='__cover__');
   if(!need.length) return;
   try{
     const cached = localStorage.getItem('gl_covers_v1');
@@ -699,7 +702,7 @@ async function loadAndInjectCovers(bookList){
     }
     let injected = 0;
     bookList.forEach(b=>{
-      if(b.cover==='__cover__' && covers[b.id]){
+      if((!b.cover||b.cover==='__cover__') && covers[b.id]){
         b.cover = covers[b.id];
         injected++;
       }
@@ -715,27 +718,29 @@ async function loadAndInjectCovers(bookList){
 
 // ── GUARDAR LIBROS ────────────────────────────────────────────────
 async function saveBooks(){
-  // For cloud: strip base64 covers (they live in /api/covers)
-  const forCloud = books.map(b=> b.cover&&b.cover.startsWith('data:') ? {...b,cover:'__cover__'} : b);
-  // For localStorage: keep covers (so device shows them offline)
-  const forLocal = books.map(b=>({...b}));
+  // Save EVERYTHING to cloud including base64 covers
+  // Netlify Blobs supports up to 5MB - our covers are ~3.4MB total, well within limit
+  const forCloud = books.map(b=>({...b}));
   
-  // Save locally with covers
-  try{ localStorage.setItem('gl_books_v4', JSON.stringify(forLocal)); }
+  // Save locally
+  try{ localStorage.setItem('gl_books_v4', JSON.stringify(forCloud)); }
   catch(e){
+    // localStorage full - clear old cover keys and retry
     for(let i=localStorage.length-1;i>=0;i--){
       const k=localStorage.key(i);
       if(k&&k.startsWith('cover_'))localStorage.removeItem(k);
     }
     try{ localStorage.setItem('gl_books_v4', JSON.stringify(forCloud)); }catch(e2){}
   }
-  // Push to cloud (base64 stripped)
+  // Push to cloud with covers included
   fetch('/api/books',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify(forCloud)
-  }).catch(e=>console.warn('Cloud save failed:',e));
+  }).catch(e=>console.warn('Cloud save failed (data safe locally):',e));
 }
+
+
 
 async function saveCoverToCloud(bookId, base64Cover){
   try{
@@ -2220,7 +2225,8 @@ function _doSubmitAdd(){
 
 
 function thumb(b){
-  if(b.cover)return `<div class="book-thumb"><img src="${b.cover}" onerror="this.parentNode.innerHTML='<svg viewBox=\\'0 0 24 24\\'><path d=\\'M4 19.5A2.5 2.5 0 016.5 17H20\\'/><path d=\\'M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z\\'/></svg>'"></div>`;
+  const _cover=b.cover&&b.cover!=='__cover__'?b.cover:null;
+  if(_cover)return `<div class="book-thumb"><img src="${b.cover}" onerror="this.parentNode.innerHTML='<svg viewBox=\\'0 0 24 24\\'><path d=\\'M4 19.5A2.5 2.5 0 016.5 17H20\\'/><path d=\\'M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z\\'/></svg>'"></div>`;
   return `<div class="book-thumb"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div>`;
 }
 function badge(b){
