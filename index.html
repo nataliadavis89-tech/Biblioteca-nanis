@@ -618,7 +618,7 @@ function showSyncPulse(){ /* no-op */ }
 
 // ── CARGAR LIBROS ─────────────────────────────────────────────────
 async function loadBooks(){
-  // ── STEP 1: Show local cache instantly while cloud loads ─────
+  // Show local cache instantly (fast)
   const stored = localStorage.getItem('gl_books_v4');
   if(stored){
     try{
@@ -628,37 +628,49 @@ async function loadBooks(){
     }catch(e){}
   }
 
-  // ── STEP 2: Cloud is ALWAYS source of truth (multi-user) ─────
+  // ALWAYS fetch from cloud — it's the source of truth for all users
   try{
     const resp = await fetch('/api/books');
     if(resp.ok){
       const remote = await resp.json();
       if(Array.isArray(remote) && remote.length > 0){
-        // Cloud wins — update local cache
         books = remote;
         localStorage.setItem('gl_books_v4', JSON.stringify(books));
         await loadAndInjectCovers(books);
         renderHome(); renderLibrary(); renderWishlist();
-        console.log('✅ Synced from cloud:', books.length, 'books');
+        console.log('☁️ Cloud sync OK:', books.length, 'books');
+        return;
+      } else if(Array.isArray(remote) && remote.length === 0){
+        // Cloud is empty — first run, push our data up
+        console.log('☁️ Cloud empty, pushing seed data...');
+        if(!books || books.length === 0){
+          books = JSON.parse(JSON.stringify(SEED));
+          localStorage.setItem('gl_books_v4', JSON.stringify(books));
+          renderHome(); renderLibrary(); renderWishlist();
+        }
+        // Push to cloud
+        await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)});
+        await fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(COVERS_SEED)});
+        localStorage.setItem('gl_covers_v1', JSON.stringify(COVERS_SEED));
+        await injectLocalCovers(books);
+        renderHome(); renderLibrary(); renderWishlist();
+        showToast('📚 Biblioteca lista en la nube · ' + books.length + ' libros');
         return;
       }
     }
-  }catch(e){ console.warn('Cloud unavailable, using local cache:', e); }
+  }catch(e){
+    console.warn('☁️ Cloud unavailable, using local only:', e);
+  }
 
-  // ── STEP 3: First ever run (Blobs empty) → push SEED ─────────
+  // No cloud, no local → seed
   if(!books || books.length === 0){
     books = JSON.parse(JSON.stringify(SEED));
     localStorage.setItem('gl_books_v4', JSON.stringify(books));
-    renderHome(); renderLibrary(); renderWishlist();
-    // Push books + 33 personal covers to cloud
-    fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)}).catch(()=>{});
-    fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(COVERS_SEED)}).catch(()=>{});
-    localStorage.setItem('gl_covers_v1', JSON.stringify(COVERS_SEED));
     await injectLocalCovers(books);
     renderHome(); renderLibrary(); renderWishlist();
-    showToast('📚 Biblioteca lista · ' + books.length + ' libros');
   }
 }
+
 
 async function injectLocalCovers(bookList){
   try{
@@ -686,18 +698,27 @@ async function loadAndInjectCovers(bookList){
 
 // ── GUARDAR LIBROS ────────────────────────────────────────────────
 async function saveBooks(){
-  // Strip base64 from book list (covers live in /api/covers)
   const forCloud = books.map(b=> b.cover&&b.cover.startsWith('data:') ? {...b,cover:'__cover__'} : b);
-  // Save locally
+  // Save locally instantly
   try{ localStorage.setItem('gl_books_v4', JSON.stringify(forCloud)); }
   catch(e){
-    for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(k&&k.startsWith('cover_'))localStorage.removeItem(k); }
+    for(let i=localStorage.length-1;i>=0;i--){
+      const k=localStorage.key(i);
+      if(k&&k.startsWith('cover_'))localStorage.removeItem(k);
+    }
     try{ localStorage.setItem('gl_books_v4', JSON.stringify(forCloud)); }catch(e2){}
   }
-  // Push to cloud in background
-  fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(forCloud)})
-    .catch(e=>console.warn('Cloud save failed — data safe locally:',e));
+  // Push to cloud (fire and forget)
+  fetch('/api/books',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(forCloud)
+  }).catch(e=>console.warn('☁️ Cloud save failed (safe locally):',e));
 }
+
+// saveCoverToCloud defined below
+
+
 
 async function saveCoverToCloud(bookId, base64Cover){
   try{ const s=localStorage.getItem('gl_covers_v1'); const c=s?JSON.parse(s):{}; c[bookId]=base64Cover; localStorage.setItem('gl_covers_v1',JSON.stringify(c)); }catch(e){}
@@ -2161,63 +2182,57 @@ let _scannerInterval = null;
 async function startBarcodeScanner(){
   const modal = document.getElementById('scanner-modal');
   if(!modal) return;
-  
-  // Check ZXing is available
   if(typeof ZXing === 'undefined'){
-    showToast('Escáner no disponible — escribe el ISBN manualmente');
+    showToast('Cargando escáner...');
+    setTimeout(startBarcodeScanner, 1000);
     return;
   }
-
   modal.style.display = 'flex';
   _scannerActive = true;
-  
   const video = document.getElementById('scanner-video');
   const status = document.getElementById('scanner-status');
-  
   try{
     _scannerStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: {ideal:1280}, height: {ideal:720} }
+      video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }
     });
     video.srcObject = _scannerStream;
     await video.play();
-    
-    const codeReader = new ZXing.BrowserMultiFormatReader();
-    
-    // Scan every 300ms
-    _scannerInterval = setInterval(async ()=>{
+    const hints = new Map();
+    const formats = [
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.UPC_A
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    const codeReader = new ZXing.BrowserMultiFormatReader(hints);
+    codeReader.decodeFromVideoDevice(null, 'scanner-video', (result, err) => {
       if(!_scannerActive) return;
-      try{
-        const result = await codeReader.decodeFromVideoElement(video);
-        if(result && result.text){
-          const isbn = result.text.replace(/[^0-9X]/g,'');
-          if(isbn.length === 13 || isbn.length === 10){
-            // Success!
-            if(status) status.textContent = '✅ ISBN detectado: ' + isbn;
-            if(navigator.vibrate) navigator.vibrate(100);
-            stopBarcodeScanner();
-            // Fill the search with ISBN and trigger search
-            const sq = document.getElementById('smart-q');
-            if(sq){ sq.value = isbn; }
-            showToast('📚 ISBN: ' + isbn + ' — buscando...');
-            await doSearch(isbn, 0, false, true);
-            setTimeout(()=>{
-              const r = document.getElementById('smart-results');
-              if(r) r.scrollIntoView({behavior:'smooth', block:'start'});
-            }, 500);
-          }
+      if(result){
+        const isbn = result.getText().replace(/[^0-9X]/gi,'');
+        if(isbn.length >= 10){
+          if(navigator.vibrate) navigator.vibrate([100]);
+          stopBarcodeScanner();
+          const sq = document.getElementById('smart-q');
+          if(sq){ sq.value = isbn; sq.dispatchEvent(new Event('input')); }
+          showToast('📚 ISBN: ' + isbn);
+          setTimeout(()=> smartSearch(true), 300);
         }
-      }catch(e){ /* no barcode yet, keep trying */ }
-    }, 300);
-    
+      }
+    });
+    _scannerInterval = codeReader;
   }catch(e){
-    if(status) status.textContent = 'Sin acceso a la cámara — actívala en ajustes';
+    if(status) status.textContent = '⚠️ Sin acceso a cámara — actívala en ajustes';
     console.warn('Camera error:', e);
   }
 }
 
 function stopBarcodeScanner(){
   _scannerActive = false;
-  if(_scannerInterval){ clearInterval(_scannerInterval); _scannerInterval = null; }
+  if(_scannerInterval){
+    try{ _scannerInterval.reset(); }catch(e){}
+    _scannerInterval = null;
+  }
   if(_scannerStream){ _scannerStream.getTracks().forEach(t=>t.stop()); _scannerStream = null; }
   const modal = document.getElementById('scanner-modal');
   if(modal) modal.style.display = 'none';
