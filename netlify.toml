@@ -1,0 +1,11 @@
+[[edge_functions]]
+  path = "/api/books"
+  function = "books-api"
+
+[[edge_functions]]
+  path = "/api/covers"
+  function = "books-api"
+
+[[edge_functions]]
+  path = "/api/wallet"
+  function = "books-api"
