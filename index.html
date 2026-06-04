@@ -1319,12 +1319,37 @@ function openAdd(){
         <div class="isbn-loading" id="isbn-load"><div class="spin"></div><span>Buscando…</span></div>
       </div>
 
-                </div>
-          <div style="position:absolute;top:8px;right:8px">
-            
+      <div class="divider"></div>
+
+      <!-- PORTADA -->
+      <div class="section-head">Portada</div>
+      <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:4px">
+        <div id="a-cover-prev" style="width:70px;height:98px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="var(--text3)" stroke-width="1.5"><rect x="3" y="2" width="18" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/></svg>
         </div>
-        <div style="font-size:11px;color:var(--text3);margin-top:4px">Pega una URL de Goodreads, Amazon, Casa del Libro, etc.</div>
+        <div style="flex:1">
+          <div class="field-group" style="margin-bottom:8px">
+            <div class="field-label">URL de portada</div>
+            <input class="field-input" type="text" id="a-cover" placeholder="https://..." oninput="prevCover(this.value)" style="font-size:12px">
+          </div>
+          <div style="display:flex;gap:8px">
+            <label style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;cursor:pointer;position:relative">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--gold)" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              <span style="font-size:7px;color:var(--gold);font-weight:700;letter-spacing:0.3px">CÁMARA</span>
+              <input type="file" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" onchange="handleAddCover(this)">
+            </label>
+            <label style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;cursor:pointer;position:relative">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--text2)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span style="font-size:7px;color:var(--text2);font-weight:700;letter-spacing:0.3px">GALERÍA</span>
+              <input type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" onchange="handleAddCover(this)">
+            </label>
+          </div>
+        </div>
       </div>
+
+      <div class="divider"></div>
+
+      <div class="section-head">Datos del libro</div>
       <div class="two-col">
         <div class="field-group"><div class="field-label">Editorial</div><input class="field-input" type="text" id="a-pub" placeholder=""></div>
         <div class="field-group"><div class="field-label">Año</div><input class="field-input" type="text" id="a-year" placeholder="2024" inputmode="numeric"></div>
