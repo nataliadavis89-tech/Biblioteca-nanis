@@ -2006,95 +2006,78 @@ async function fetchFromBookURL(){
 
 // ── BACKUP / RESTORE ──────────────────────────────────────────────
 async function exportBackup(){
-  showToast('Preparando backup…');
+  showToast('Preparando backup...');
   try{
-    const exportBooks=books.map(b=>({...b}));
-
-    const payload={
-      version:3,
-      exported:new Date().toISOString(),
-      wallet:{balance:walletBalance,txs:walletTxList},
-      books:exportBooks
+    const exportData = {
+      version: 3,
+      exportDate: new Date().toISOString(),
+      books: books.map(b=>({...b}))
     };
-
-    const json=JSON.stringify(payload);
-    const blob=new Blob([json],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    const date=new Date().toISOString().slice(0,10);
-    a.href=url;
-    a.download=`gotham-library-backup-${date}.json`;
+    if(typeof walletBalance !== 'undefined'){
+      exportData.wallet = { balance: walletBalance, txs: walletTxList || [] };
+    }
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gotham-library-backup-' + new Date().toISOString().slice(0,10) + '.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-
-    const dateStr=new Date().toLocaleDateString('es-ES',{day:'2-digit',month:'short',year:'numeric'});
-    localStorage.setItem('gl_last_backup',dateStr);
-    const el=document.getElementById('last-backup-date');
-    if(el)el.textContent=dateStr;
-
-    showToast(`✓ Backup exportado · ${exportBooks.length} libros`);
+    showToast('✓ Backup exportado · ' + books.length + ' libros');
   }catch(e){
-    console.error('Backup error:',e);
-    showToast('Error al exportar');
+    showToast('Error al exportar: ' + e.message);
   }
 }
 
-async function importBackup(input){
-  const file=input&&input.files&&input.files[0];
-  if(!file){return;}
 
-  if(!confirm(`¿Restaurar backup?\n\nEsto reemplazará todos tus ${books.length} libros actuales con los del archivo.\n\nEsta acción no se puede deshacer.`)){
-    input.value='';
+async function importBackup(input){
+  const file = input && input.files && input.files[0];
+  if(!file){ return; }
+
+  if(!confirm('¿Restaurar backup?\n\nEsto reemplazará todos tus ' + books.length + ' libros actuales.\n\nEsta acción no se puede deshacer.')){
+    input.value = '';
     return;
   }
 
   showToast('Importando...');
   try{
-    const text=await file.text();
-    const payload=JSON.parse(text);
+    const text = await file.text();
+    const payload = JSON.parse(text);
 
-    // Validate
-    if(!payload.books||!Array.isArray(payload.books)){
+    if(!payload.books || !Array.isArray(payload.books)){
       showToast('Archivo inválido — no es un backup de Gotham Library');
+      input.value = '';
       return;
     }
 
-    // Restore books
-    books=payload.books;
-
-    // Restore covers to IndexedDB
-    let coverCount=0;
-    await Promise.all(books.map(async b=>{
-      if(b.cover&&b.cover.startsWith('data:')){
-        await saveCover(b.id, b.cover);
-        b.cover='__idb__'; // normalize
-        coverCount++;
-      }
-    }));
+    // Restore books — covers stay embedded in each book object
+    books = payload.books;
 
     // Restore wallet if present
     if(payload.wallet){
-      walletBalance=payload.wallet.balance||0;
-      walletTxList=payload.wallet.txs||[];
-      try{localStorage.setItem('gl_wallet',JSON.stringify({balance:walletBalance,txs:walletTxList}));}catch(e){}
+      walletBalance = payload.wallet.balance || 0;
+      walletTxList = payload.wallet.txs || [];
+      try{ localStorage.setItem('gl_wallet', JSON.stringify({balance:walletBalance, txs:walletTxList})); }catch(e){}
     }
 
-    // Save everything
+    // Save to localStorage and push to cloud (with covers included)
     await saveBooks();
 
-    // Re-render
-    await rehydrateCovers(books);
-    renderHome(); renderLibrary(); renderWishlist(); renderProfile();
+    renderHome(); renderLibrary(); renderWishlist();
+    if(typeof renderProfile === 'function') renderProfile();
 
-    showToast(`✓ ${books.length} libros restaurados · ${coverCount} portadas`);
+    const coverCount = books.filter(b=>b.cover && b.cover.startsWith('data:')).length;
+    showToast('✓ ' + books.length + ' libros restaurados · ' + coverCount + ' portadas');
+
   }catch(e){
-    console.error('Import error:',e);
+    console.error('Import error:', e);
     showToast('Error al importar — verifica que el archivo sea correcto');
   }
-  input.value='';
+  input.value = '';
 }
+
 
 // Tracks if user already confirmed duplicate
 let _dupConfirmed = false;
