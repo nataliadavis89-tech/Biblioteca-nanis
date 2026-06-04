@@ -1309,15 +1309,8 @@ function openAdd(){
 
       <div class="divider"></div>
 
-      <!-- ISBN SEARCH -->
-      <div class="section-head">Buscar por ISBN</div>
-      <div class="field-group">
-        <div class="isbn-row">
-          <input class="field-input" type="text" id="a-isbn" placeholder="9780123456789" inputmode="numeric" style="flex:1">
-          <button class="isbn-btn" onclick="fetchISBN()">Buscar</button>
-        </div>
-        <div class="isbn-loading" id="isbn-load"><div class="spin"></div><span>Buscando…</span></div>
-      </div>
+      <!-- ISBN field (hidden, filled by smart search) -->
+      <input type="hidden" id="a-isbn">
 
       <div class="divider"></div>
 
@@ -1350,6 +1343,8 @@ function openAdd(){
       <div class="divider"></div>
 
       <div class="section-head">Datos del libro</div>
+      <div class="field-group"><div class="field-label">Título *</div><input class="field-input" type="text" id="a-title" placeholder="Título del libro" autocomplete="off"></div>
+      <div class="field-group"><div class="field-label">Autor</div><input class="field-input" type="text" id="a-author" placeholder="Nombre del autor" autocomplete="off"></div>
       <div class="two-col">
         <div class="field-group"><div class="field-label">Editorial</div><input class="field-input" type="text" id="a-pub" placeholder=""></div>
         <div class="field-group"><div class="field-label">Año</div><input class="field-input" type="text" id="a-year" placeholder="2024" inputmode="numeric"></div>
@@ -1577,7 +1572,7 @@ async function smartSearch(immediate){
   },delay);
 }
 
-async function handleURLInput(url){
+async async function handleURLInput(url){
   const res=document.getElementById('smart-results');
   if(res)res.innerHTML='<div class="smart-loading"><div class="spin"></div><span>Analizando URL...</span></div>';
   const isbnMatch=url.match(/(?:\/dp\/|isbn[=\/\-_]?|\/libro[^/]*\/)([0-9]{13})/i)||url.match(/\b(978[0-9]{10})\b/);
@@ -1603,6 +1598,16 @@ async function handleURLInput(url){
   } else {
     if(res)res.innerHTML='<div style="padding:16px;text-align:center;font-size:13px;color:var(--text3)">No pude extraer el título de esa URL.<br><span style="color:var(--gold)">Escribe el título directamente.</span></div>';
   }
+}
+
+// fetchISBN — called by old ISBN button (kept for compatibility)
+function fetchISBN(){
+  const isbnEl = document.getElementById('a-isbn');
+  const val = isbnEl ? isbnEl.value.trim() : '';
+  if(!val){ showToast('Introduce un ISBN'); return; }
+  const sq = document.getElementById('smart-q');
+  if(sq){ sq.value = val; sq.dispatchEvent(new Event('input')); }
+  smartSearch(true);
 }
 
 async function doSearch(query, offset, append, isISBN){
