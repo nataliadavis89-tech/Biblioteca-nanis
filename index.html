@@ -618,7 +618,7 @@ function showSyncPulse(){ /* no-op */ }
 
 // ── CARGAR LIBROS ─────────────────────────────────────────────────
 async function loadBooks(){
-  // ── STEP 1: Show local cache instantly ──────────────────────
+  // ── STEP 1: Show local cache instantly while cloud loads ─────
   const stored = localStorage.getItem('gl_books_v4');
   if(stored){
     try{
@@ -627,28 +627,31 @@ async function loadBooks(){
       renderHome(); renderLibrary(); renderWishlist();
     }catch(e){}
   }
-  // ── STEP 2: Sync from cloud (source of truth) ────────────────
+
+  // ── STEP 2: Cloud is ALWAYS source of truth (multi-user) ─────
   try{
     const resp = await fetch('/api/books');
     if(resp.ok){
       const remote = await resp.json();
       if(Array.isArray(remote) && remote.length > 0){
+        // Cloud wins — update local cache
         books = remote;
         localStorage.setItem('gl_books_v4', JSON.stringify(books));
         await loadAndInjectCovers(books);
         renderHome(); renderLibrary(); renderWishlist();
+        console.log('✅ Synced from cloud:', books.length, 'books');
         return;
       }
     }
   }catch(e){ console.warn('Cloud unavailable, using local cache:', e); }
-  // ── STEP 3: First ever run → push SEED + 33 personal covers ──
+
+  // ── STEP 3: First ever run (Blobs empty) → push SEED ─────────
   if(!books || books.length === 0){
     books = JSON.parse(JSON.stringify(SEED));
     localStorage.setItem('gl_books_v4', JSON.stringify(books));
     renderHome(); renderLibrary(); renderWishlist();
-    // Push books to cloud
+    // Push books + 33 personal covers to cloud
     fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)}).catch(()=>{});
-    // Push your 33 personal photos to covers blob
     fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(COVERS_SEED)}).catch(()=>{});
     localStorage.setItem('gl_covers_v1', JSON.stringify(COVERS_SEED));
     await injectLocalCovers(books);
@@ -1269,6 +1272,9 @@ function openAdd(){
             placeholder="Título, autor, editorial o pega una URL…"
             autocomplete="off" oninput="smartSearch()" onkeydown="if(event.key==='Enter')smartSearch(true)">
           <div class="smart-search-clear" id="smart-clear" onclick="clearSmartSearch()" style="display:none">✕</div>
+          <div onclick="startBarcodeScanner()" style="width:36px;height:36px;background:var(--gold);border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-left:6px" title="Escanear código de barras">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2"><rect x="3" y="3" width="4" height="18"/><rect x="9" y="3" width="2" height="18"/><rect x="13" y="3" width="4" height="18"/><rect x="19" y="3" width="2" height="18"/></svg>
+          </div>
         </div>
         <div style="font-size:10px;color:var(--text3);margin-top:5px;padding-left:2px">
           También puedes pegar: URL de Alma, Casa del Libro, Goodreads, Amazon, ISBN…
@@ -1624,6 +1630,9 @@ async function doSearch(query,offset,append,isISBN){
   if(isISBN){
     searches.push(fetch('https://www.googleapis.com/books/v1/volumes?q=isbn:'+encodeURIComponent(query)+'&maxResults=10').catch(()=>null));
     searches.push(fetch('https://openlibrary.org/search.json?isbn='+encodeURIComponent(query)+'&limit=5&fields=key,title,subtitle,author_name,cover_i,first_publish_year,publisher,subject,isbn').catch(()=>null));
+    // Spanish sources - better coverage for ES publishers
+    searches.push(fetch('https://www.googleapis.com/books/v1/volumes?q=isbn:'+encodeURIComponent(query)+'&maxResults=5&langRestrict=es').catch(()=>null));
+    searches.push(fetch('https://openlibrary.org/isbn/'+encodeURIComponent(query)+'.json').catch(()=>null));
   } else {
     searches.push(fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(query)+'&maxResults=20&startIndex='+offset+'&printType=books').catch(()=>null));
     searches.push(fetch('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent(query)+'&maxResults=10&startIndex='+offset+'&orderBy=relevance').catch(()=>null));
@@ -1656,6 +1665,22 @@ async function doSearch(query,offset,append,isISBN){
             });
           }
         });
+      }
+      // Open Library /isbn/ direct endpoint
+      if(d.title&&!d.docs&&!d.items){
+        const cid=d.covers?d.covers[0]:0;
+        const key=(d.title||'').toLowerCase();
+        if(!results.some(r=>r._key===key)){
+          results.push({_key:key,
+            title:d.title||'',subtitle:'',
+            author:'',year:d.publish_date?d.publish_date.slice(-4):'',
+            publisher:(d.publishers||[])[0]||'',
+            coverUrl:cid?'https://covers.openlibrary.org/b/id/'+cid+'-M.jpg':'',
+            coverId:cid||0,subject:'',
+            isbn:(d.isbn_13||d.isbn_10||[])[0]||'',synopsis:'',
+            editionType:null
+          });
+        }
       }
       // Open Library format
       if(d.docs){
@@ -2104,6 +2129,100 @@ function bulkDelete(){
   toggleSelectMode();
   renderLibrary();
   renderHome();
+}
+</script>
+
+<!-- ── BARCODE SCANNER MODAL ──────────────────────────────────── -->
+<div id="scanner-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:2000;flex-direction:column;align-items:center;justify-content:center">
+  <div style="position:relative;width:100%;max-width:400px;padding:20px">
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:3px;color:var(--gold);text-align:center;margin-bottom:16px">ESCANEAR ISBN</div>
+    <div style="position:relative;border-radius:12px;overflow:hidden;background:#000">
+      <video id="scanner-video" style="width:100%;display:block;border-radius:12px" playsinline></video>
+      <!-- Targeting overlay -->
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+        <div style="width:80%;height:80px;border:2px solid var(--gold);border-radius:8px;box-shadow:0 0 0 2000px rgba(0,0,0,0.4)">
+          <div style="position:absolute;top:0;left:0;width:20px;height:20px;border-top:3px solid var(--gold);border-left:3px solid var(--gold);border-radius:2px 0 0 0"></div>
+          <div style="position:absolute;top:0;right:0;width:20px;height:20px;border-top:3px solid var(--gold);border-right:3px solid var(--gold);border-radius:0 2px 0 0"></div>
+          <div style="position:absolute;bottom:0;left:0;width:20px;height:20px;border-bottom:3px solid var(--gold);border-left:3px solid var(--gold);border-radius:0 0 0 2px"></div>
+          <div style="position:absolute;bottom:0;right:0;width:20px;height:20px;border-bottom:3px solid var(--gold);border-right:3px solid var(--gold);border-radius:0 0 2px 0"></div>
+        </div>
+      </div>
+    </div>
+    <div id="scanner-status" style="text-align:center;color:var(--text2);font-size:13px;margin-top:12px;min-height:20px">Apunta al código de barras del libro</div>
+    <button onclick="stopBarcodeScanner()" style="width:100%;margin-top:16px;padding:14px;background:var(--surface2);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:15px;font-family:'Inter',sans-serif;cursor:pointer">Cancelar</button>
+  </div>
+</div>
+<script>
+// ── BARCODE SCANNER ───────────────────────────────────────────────
+let _scannerActive = false;
+let _scannerStream = null;
+let _scannerInterval = null;
+
+async function startBarcodeScanner(){
+  const modal = document.getElementById('scanner-modal');
+  if(!modal) return;
+  
+  // Check ZXing is available
+  if(typeof ZXing === 'undefined'){
+    showToast('Escáner no disponible — escribe el ISBN manualmente');
+    return;
+  }
+
+  modal.style.display = 'flex';
+  _scannerActive = true;
+  
+  const video = document.getElementById('scanner-video');
+  const status = document.getElementById('scanner-status');
+  
+  try{
+    _scannerStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: {ideal:1280}, height: {ideal:720} }
+    });
+    video.srcObject = _scannerStream;
+    await video.play();
+    
+    const codeReader = new ZXing.BrowserMultiFormatReader();
+    
+    // Scan every 300ms
+    _scannerInterval = setInterval(async ()=>{
+      if(!_scannerActive) return;
+      try{
+        const result = await codeReader.decodeFromVideoElement(video);
+        if(result && result.text){
+          const isbn = result.text.replace(/[^0-9X]/g,'');
+          if(isbn.length === 13 || isbn.length === 10){
+            // Success!
+            if(status) status.textContent = '✅ ISBN detectado: ' + isbn;
+            if(navigator.vibrate) navigator.vibrate(100);
+            stopBarcodeScanner();
+            // Fill the search with ISBN and trigger search
+            const sq = document.getElementById('smart-q');
+            if(sq){ sq.value = isbn; }
+            showToast('📚 ISBN: ' + isbn + ' — buscando...');
+            await doSearch(isbn, 0, false, true);
+            setTimeout(()=>{
+              const r = document.getElementById('smart-results');
+              if(r) r.scrollIntoView({behavior:'smooth', block:'start'});
+            }, 500);
+          }
+        }
+      }catch(e){ /* no barcode yet, keep trying */ }
+    }, 300);
+    
+  }catch(e){
+    if(status) status.textContent = 'Sin acceso a la cámara — actívala en ajustes';
+    console.warn('Camera error:', e);
+  }
+}
+
+function stopBarcodeScanner(){
+  _scannerActive = false;
+  if(_scannerInterval){ clearInterval(_scannerInterval); _scannerInterval = null; }
+  if(_scannerStream){ _scannerStream.getTracks().forEach(t=>t.stop()); _scannerStream = null; }
+  const modal = document.getElementById('scanner-modal');
+  if(modal) modal.style.display = 'none';
+  const video = document.getElementById('scanner-video');
+  if(video){ video.srcObject = null; }
 }
 </script>
 </body>
