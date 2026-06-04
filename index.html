@@ -1317,7 +1317,7 @@ function openAdd(){
       <!-- PORTADA -->
       <div class="section-head">Portada</div>
       <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:4px">
-        <div id="a-cover-prev" style="width:70px;height:98px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;overflow:hidden">
+        <div id="cpw" style="width:70px;height:98px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;overflow:hidden">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="var(--text3)" stroke-width="1.5"><rect x="3" y="2" width="18" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/></svg>
         </div>
         <div style="flex:1">
@@ -1572,7 +1572,7 @@ async function smartSearch(immediate){
   },delay);
 }
 
-async async function handleURLInput(url){
+async function handleURLInput(url){
   const res=document.getElementById('smart-results');
   if(res)res.innerHTML='<div class="smart-loading"><div class="spin"></div><span>Analizando URL...</span></div>';
   const isbnMatch=url.match(/(?:\/dp\/|isbn[=\/\-_]?|\/libro[^/]*\/)([0-9]{13})/i)||url.match(/\b(978[0-9]{10})\b/);
