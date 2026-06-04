@@ -611,7 +611,7 @@ function showSyncPulse(){ /* no-op */ }
 
 // ── CARGAR LIBROS ─────────────────────────────────────────────────
 async function loadBooks(){
-  // Show local cache instantly (fast)
+  // STEP 1: Show local cache instantly
   const stored = localStorage.getItem('gl_books_v4');
   if(stored){
     try{
@@ -621,38 +621,36 @@ async function loadBooks(){
     }catch(e){}
   }
 
-  // ALWAYS fetch from cloud — it's the source of truth for all users
+  // STEP 2: Cloud is always source of truth
   try{
     const resp = await fetch('/api/books');
     if(resp.ok){
       const remote = await resp.json();
       if(Array.isArray(remote) && remote.length > 0){
         books = remote;
-        localStorage.setItem('gl_books_v4', JSON.stringify(books));
+        // Inject covers BEFORE saving to localStorage
         await loadAndInjectCovers(books);
+        // Now save WITH covers already injected
+        const forStorage = books.map(b=>({...b}));
+        localStorage.setItem('gl_books_v4', JSON.stringify(forStorage));
         renderHome(); renderLibrary(); renderWishlist();
-        console.log('☁️ Cloud sync OK:', books.length, 'books');
         return;
       } else if(Array.isArray(remote) && remote.length === 0){
-        // Cloud is empty — first run, push our data up
-        console.log('☁️ Cloud empty, pushing seed data...');
         if(!books || books.length === 0){
           books = JSON.parse(JSON.stringify(SEED));
-          localStorage.setItem('gl_books_v4', JSON.stringify(books));
-          renderHome(); renderLibrary(); renderWishlist();
         }
-        // Push to cloud
-        await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)});
-        await fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(COVERS_SEED)});
+        await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(books)}).catch(()=>{});
+        await fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(COVERS_SEED)}).catch(()=>{});
         localStorage.setItem('gl_covers_v1', JSON.stringify(COVERS_SEED));
         await injectLocalCovers(books);
+        localStorage.setItem('gl_books_v4', JSON.stringify(books));
         renderHome(); renderLibrary(); renderWishlist();
-        showToast('📚 Biblioteca lista en la nube · ' + books.length + ' libros');
+        showToast('📚 Biblioteca lista · ' + books.length + ' libros');
         return;
       }
     }
   }catch(e){
-    console.warn('☁️ Cloud unavailable, using local only:', e);
+    console.warn('Cloud unavailable, using local:', e);
   }
 
   // No cloud, no local → seed
@@ -663,6 +661,7 @@ async function loadBooks(){
     renderHome(); renderLibrary(); renderWishlist();
   }
 }
+
 
 
 async function injectLocalCovers(bookList){
@@ -716,9 +715,13 @@ async function loadAndInjectCovers(bookList){
 
 // ── GUARDAR LIBROS ────────────────────────────────────────────────
 async function saveBooks(){
+  // For cloud: strip base64 covers (they live in /api/covers)
   const forCloud = books.map(b=> b.cover&&b.cover.startsWith('data:') ? {...b,cover:'__cover__'} : b);
-  // Save locally instantly
-  try{ localStorage.setItem('gl_books_v4', JSON.stringify(forCloud)); }
+  // For localStorage: keep covers (so device shows them offline)
+  const forLocal = books.map(b=>({...b}));
+  
+  // Save locally with covers
+  try{ localStorage.setItem('gl_books_v4', JSON.stringify(forLocal)); }
   catch(e){
     for(let i=localStorage.length-1;i>=0;i--){
       const k=localStorage.key(i);
@@ -726,23 +729,34 @@ async function saveBooks(){
     }
     try{ localStorage.setItem('gl_books_v4', JSON.stringify(forCloud)); }catch(e2){}
   }
-  // Push to cloud (fire and forget)
+  // Push to cloud (base64 stripped)
   fetch('/api/books',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify(forCloud)
-  }).catch(e=>console.warn('☁️ Cloud save failed (safe locally):',e));
+  }).catch(e=>console.warn('Cloud save failed:',e));
 }
+
+async function saveCoverToCloud(bookId, base64Cover){
+  try{
+    const s=localStorage.getItem('gl_covers_v1');
+    const c=s?JSON.parse(s):{};
+    c[bookId]=base64Cover;
+    localStorage.setItem('gl_covers_v1',JSON.stringify(c));
+  }catch(e){}
+  fetch('/api/covers',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({[bookId]:base64Cover})
+  }).catch(e=>console.warn('Cover cloud save failed:',e));
+}
+
 
 // saveCoverToCloud defined below
 
 
 
-async function saveCoverToCloud(bookId, base64Cover){
-  try{ const s=localStorage.getItem('gl_covers_v1'); const c=s?JSON.parse(s):{}; c[bookId]=base64Cover; localStorage.setItem('gl_covers_v1',JSON.stringify(c)); }catch(e){}
-  fetch('/api/covers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[bookId]:base64Cover})})
-    .catch(e=>console.warn('Cover cloud save failed — saved locally:',e));
-}
+
 
 
 // ── GUARDAR WALLET ────────────────────────────────────────────────
