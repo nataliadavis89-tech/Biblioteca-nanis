@@ -4,10 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Gotham Library</title>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
-<!-- ZXing barcode decoder -->
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
-<style>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"><style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
   --bg:#0a0a0a;--surface:#141414;--surface2:#1c1c1c;--surface3:#242424;
@@ -280,11 +277,7 @@ select.field-input option{background:var(--surface)}
 .url-extract-strip input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:13px;padding:10px 0;font-family:'Inter',sans-serif}
 .url-extract-strip input::placeholder{color:var(--text3)}
 .url-extract-btn{flex-shrink:0;padding:6px 12px;background:var(--gold);color:var(--bg);border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
-.url-extract-btn:disabled{background:var(--surface3);color:var(--text3)}
-/* ISBN row with scan button */
-.isbn-scan-btn{width:40px;height:40px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;color:var(--gold)}
-.isbn-scan-btn svg{width:20px;height:20px}
-/* Edition tag selector (multi-select chips) */
+.url-extract-btn:disabled{background:var(--surface3);color:var(--text3)}/* Edition tag selector (multi-select chips) */
 .etag-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
 .etag{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text2);white-space:nowrap;-webkit-tap-highlight-color:transparent;user-select:none}
 .etag:active{opacity:0.7}
@@ -1316,7 +1309,7 @@ function openAdd(){
 
       <div class="divider"></div>
 
-      <!-- ISBN + BARCODE -->
+      <!-- ISBN SEARCH -->
       <div class="section-head">Buscar por ISBN</div>
       <div class="field-group">
         <div class="isbn-row">
@@ -1326,58 +1319,9 @@ function openAdd(){
         <div class="isbn-loading" id="isbn-load"><div class="spin"></div><span>Buscando…</span></div>
       </div>
 
-      <!-- BARCODE SCANNER AREA -->
-      <div id="scanner-area" style="display:none;margin-bottom:12px">
-        <div style="position:relative;border-radius:10px;overflow:hidden;background:#000;aspect-ratio:4/3">
-          <video id="scanner-video" style="width:100%;height:100%;object-fit:cover" playsinline autoplay muted></video>
-          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
-            <div style="width:80%;height:2px;background:var(--gold);box-shadow:0 0 8px var(--gold);border-radius:1px"></div>
-          </div>
+                </div>
           <div style="position:absolute;top:8px;right:8px">
-            <button onclick="stopBarcodeScanner()" style="background:rgba(0,0,0,0.7);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">✕ Cerrar</button>
-          </div>
-        </div>
-        <p style="font-size:11px;color:var(--text3);text-align:center;margin-top:6px">Apunta la cámara al código de barras del libro</p>
-      </div>
-
-      <div class="divider"></div>
-
-      <!-- BOOK DATA -->
-      <div class="section-head">Datos del libro</div>
-
-      <!-- COVER with camera option -->
-      <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px">
-        <div style="flex-shrink:0">
-          <div class="cover-preview-wrap" id="cpw">
-            <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px">
-            <!-- Cámara: capture=environment para iOS -->
-            <label style="flex:1;min-width:44px;min-height:44px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;padding:8px 4px;-webkit-tap-highlight-color:transparent" title="Abrir cámara">
-              <svg width="20" height="20" viewBox="0 0 24 24" stroke="var(--gold)" fill="none" stroke-width="1.5"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
-              <span style="font-size:9px;color:var(--text3);letter-spacing:0.5px;text-transform:uppercase;line-height:1">Cámara</span>
-              <input type="file" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" onchange="handleAddCover(this)">
-            </label>
-            <!-- Fototeca: sin capture para acceder al álbum -->
-            <label style="flex:1;min-width:44px;min-height:44px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;padding:8px 4px;-webkit-tap-highlight-color:transparent" title="Elegir de la fototeca">
-              <svg width="20" height="20" viewBox="0 0 24 24" stroke="var(--text2)" fill="none" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg>
-              <span style="font-size:9px;color:var(--text3);letter-spacing:0.5px;text-transform:uppercase;line-height:1">Foto</span>
-              <input type="file" accept="image/*" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" onchange="handleAddCover(this)">
-            </label>
-          </div>
-        </div>
-        <div style="flex:1">
-          <div class="field-group" style="margin-bottom:8px"><div class="field-label">URL Portada</div><input class="field-input" type="url" id="a-cover" placeholder="https://…" oninput="prevCover(this.value)"></div>
-          <div class="field-group"><div class="field-label">Título *</div><input class="field-input" type="text" id="a-title" placeholder="Título del libro"></div>
-        </div>
-      </div>
-
-      <div class="field-group"><div class="field-label">Autor *</div><input class="field-input" type="text" id="a-author" placeholder="Nombre del autor"></div>
-      <div class="field-group">
-        <div class="field-label">URL del libro</div>
-        <div style="display:flex;gap:8px">
-          <input class="field-input" type="url" id="a-bookurl" placeholder="https://www.goodreads.com/book/…" style="flex:1">
-          <button class="isbn-btn" onclick="fetchFromBookURL()" id="bookurl-btn" title="Extraer datos de la URL">Extraer</button>
+            
         </div>
         <div style="font-size:11px;color:var(--text3);margin-top:4px">Pega una URL de Goodreads, Amazon, Casa del Libro, etc.</div>
       </div>
@@ -1412,7 +1356,6 @@ function openAdd(){
   as.classList.add('open');
 }
 function closeAdd(){
-  stopBarcodeScanner();
   const as = document.getElementById('add-screen');
   as.classList.remove('open');
   as.style.display = 'none';
@@ -2293,24 +2236,6 @@ function bulkDelete(){
   renderLibrary();
   renderHome();
 }
-</script>
-    <div style="position:relative;border-radius:12px;overflow:hidden;background:#000">
-      <video id="scanner-video" style="width:100%;display:block;border-radius:12px" playsinline></video>
-      <!-- Targeting overlay -->
-      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
-        <div style="width:80%;height:80px;border:2px solid var(--gold);border-radius:8px;box-shadow:0 0 0 2000px rgba(0,0,0,0.4)">
-          <div style="position:absolute;top:0;left:0;width:20px;height:20px;border-top:3px solid var(--gold);border-left:3px solid var(--gold);border-radius:2px 0 0 0"></div>
-          <div style="position:absolute;top:0;right:0;width:20px;height:20px;border-top:3px solid var(--gold);border-right:3px solid var(--gold);border-radius:0 2px 0 0"></div>
-          <div style="position:absolute;bottom:0;left:0;width:20px;height:20px;border-bottom:3px solid var(--gold);border-left:3px solid var(--gold);border-radius:0 0 0 2px"></div>
-          <div style="position:absolute;bottom:0;right:0;width:20px;height:20px;border-bottom:3px solid var(--gold);border-right:3px solid var(--gold);border-radius:0 0 2px 0"></div>
-        </div>
-      </div>
-    </div>
-    <div id="scanner-status" style="text-align:center;color:var(--text2);font-size:13px;margin-top:12px;min-height:20px">Apunta al código de barras del libro</div>
-    <button onclick="stopBarcodeScanner()" style="width:100%;margin-top:16px;padding:14px;background:var(--surface2);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:15px;font-family:'Inter',sans-serif;cursor:pointer">Cancelar</button>
-  </div>
-</div>
-<script>
 </script>
 </body>
 </html>
