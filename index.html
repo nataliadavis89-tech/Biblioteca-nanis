@@ -670,9 +670,19 @@ async function injectLocalCovers(bookList){
     const stored = localStorage.getItem('gl_covers_v1');
     if(!stored) return;
     const covers = JSON.parse(stored);
-    bookList.forEach(b=>{ if(b.cover==='__cover__' && covers[b.id]) b.cover=covers[b.id]; });
+    let injected = 0;
+    bookList.forEach(b=>{
+      if(b.cover==='__cover__' && covers[b.id]){
+        b.cover = covers[b.id];
+        injected++;
+      }
+    });
+    if(injected > 0){
+      renderHome(); renderLibrary(); renderWishlist();
+    }
   }catch(e){}
 }
+
 
 async function loadAndInjectCovers(bookList){
   const need = bookList.filter(b=>b.cover==='__cover__');
@@ -682,11 +692,26 @@ async function loadAndInjectCovers(bookList){
     let covers = cached ? JSON.parse(cached) : {};
     if(need.some(b=>!covers[b.id])){
       const resp = await fetch('/api/covers');
-      if(resp.ok){ const remote=await resp.json(); covers={...covers,...remote}; localStorage.setItem('gl_covers_v1',JSON.stringify(covers)); }
+      if(resp.ok){
+        const remote = await resp.json();
+        covers = {...covers, ...remote};
+        localStorage.setItem('gl_covers_v1', JSON.stringify(covers));
+      }
     }
-    bookList.forEach(b=>{ if(b.cover==='__cover__' && covers[b.id]) b.cover=covers[b.id]; });
-  }catch(e){ console.warn('Cover load error:',e); }
+    let injected = 0;
+    bookList.forEach(b=>{
+      if(b.cover==='__cover__' && covers[b.id]){
+        b.cover = covers[b.id];
+        injected++;
+      }
+    });
+    // Re-render if we injected any covers
+    if(injected > 0){
+      renderHome(); renderLibrary(); renderWishlist();
+    }
+  }catch(e){ console.warn('Cover load error:', e); }
 }
+
 
 
 // ── GUARDAR LIBROS ────────────────────────────────────────────────
@@ -1561,44 +1586,65 @@ async function smartSearch(immediate){
   clearTimeout(smartTimer);
   const delay=immediate?0:420;
   smartTimer=setTimeout(async()=>{
-    if(raw.trim().startsWith('http')){
-      await handleURLInput(raw.trim());
+    const q = raw.trim();
+    if(q.startsWith('http')){
+      await handleURLInput(q);
       return;
     }
-    smartLastQ=raw.trim();
+    // Detect plain ISBN (13 or 10 digits)
+    const isISBN = /^(978|979)[0-9]{10}$/.test(q) || /^[0-9]{10}$/.test(q);
+    smartLastQ=q;
     smartPage=0;
     if(res)res.innerHTML='<div class="smart-loading"><div class="spin"></div><span>Buscando...</span></div>';
-    await doSearch(raw.trim(),0,false);
+    await doSearch(q,0,false,isISBN);
   },delay);
 }
 
 async function handleURLInput(url){
   const res=document.getElementById('smart-results');
   if(res)res.innerHTML='<div class="smart-loading"><div class="spin"></div><span>Analizando URL...</span></div>';
-  const isbnMatch=url.match(/(?:\/dp\/|isbn[=\/\-_]?|\/libro[^/]*\/)([0-9]{13})/i)||url.match(/\b(978[0-9]{10})\b/);
-  if(isbnMatch){
-    const isbn=isbnMatch[1];
-    smartLastQ=isbn;
-    await doSearch(isbn,0,false,true);
+  
+  // Extract ISBN from any URL format:
+  // isbndb.com/book/9788408304982
+  // casadellibro.com/libro-title/9788408304982/123
+  // amazon.com/dp/1234567890
+  // goodreads.com/book/show/123
+  // Any URL containing a 13-digit ISBN starting with 978/979
+  const isbnPatterns = [
+    /\/book\/([0-9]{10,13})/i,
+    /\/dp\/([0-9]{10,13})/i,
+    /isbn[=\/\-_]([0-9]{10,13})/i,
+    /\/([97][0-9]{12})\b/,
+    /\b(97[89][0-9]{10})\b/,
+    /\/([0-9]{13})[\/\-_?#]/,
+    /\/([0-9]{13})$/
+  ];
+  
+  let isbn = null;
+  for(const pat of isbnPatterns){
+    const m = url.match(pat);
+    if(m){ isbn = m[1]; break; }
+  }
+  
+  if(isbn){
+    smartLastQ = isbn;
+    await doSearch(isbn, 0, false, true);
     return;
   }
-  const slug=url.replace(/https?:\/\/[^/]+/,'').split('?')[0]
+  
+  // No ISBN found — extract title keywords from URL slug
+  const slug = url.replace(/https?:\/\/[^/]+/,'').split('?')[0]
     .split('/').filter(s=>s.length>2&&!/^\d+$/.test(s)&&!['book','show','libros','libro','product','books','tienda','catalogo','catalog'].includes(s.toLowerCase())).pop()||'';
-  const terms=slug.replace(/[-_]/g,' ').replace(/\.html?$/i,'').replace(/\d{13}/g,'').trim();
-  const domain=url.match(/(?:https?:\/\/)?(?:www\.)?([^/]+)/)?.[1]||'';
-  const domainMap={'editorialalma.com':'Alma','blackiebooks.com':'Blackie Books','impedimenta.es':'Impedimenta',
-    'minalima.com':'MinaLima','salamandra.info':'Salamandra','planetadelibros.com':'Planeta',
-    'anagrama.com':'Anagrama','sextopiso.com':'Sexto Piso'};
-  const publisherHint=Object.entries(domainMap).find(([d])=>domain.includes(d))?.[1]||'';
-  const query=publisherHint?terms+' '+publisherHint:terms;
-  if(query.trim().length>2){
-    smartLastQ=query.trim();
-    if(res)res.innerHTML='<div class="smart-loading"><div class="spin"></div><span>Buscando "'+esc(terms)+'"...</span></div>';
-    await doSearch(query.trim(),0,false);
+  const terms = slug.replace(/[-_]/g,' ').replace(/\.html?$/i,'').replace(/\d{13}/g,'').trim();
+  
+  if(terms.length > 2){
+    smartLastQ = terms;
+    await doSearch(terms, 0, false, false);
   } else {
-    if(res)res.innerHTML='<div style="padding:16px;text-align:center;font-size:13px;color:var(--text3)">No pude extraer el título de esa URL.<br><span style="color:var(--gold)">Escribe el título directamente.</span></div>';
+    if(res) res.innerHTML='<div class="smart-empty">No se pudo extraer información de esta URL</div>';
   }
 }
+
 
 // fetchISBN — called by old ISBN button (kept for compatibility)
 function fetchISBN(){
@@ -1781,7 +1827,22 @@ function escHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').r
 function escAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 function renderSearchResults(res, results, query, offset, append){
   if(!results || !results.length){
-    res.innerHTML = '<div class="smart-empty">Sin resultados para &ldquo;'+escHtml(query)+'&rdquo;<br><small style="opacity:.6">Prueba con título, apellido del autor o ISBN</small></div>';
+    const isISBNq = /^[0-9]{10,13}$/.test((query||'').replace(/[-\s]/g,''));
+    const googleImgUrl = 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(query + ' libro portada');
+    const googleBooksUrl = 'https://www.google.com/search?q=' + encodeURIComponent('libro ' + query + ' ISBN');
+    res.innerHTML = '<div class="smart-empty" style="padding:16px 12px">'
+      + 'Sin resultados para &ldquo;' + escHtml(query) + '&rdquo;'
+      + '<br><small style="opacity:.6;display:block;margin-top:4px">No encontrado en las bases de datos disponibles</small>'
+      + '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">'
+      + '<a href="' + googleImgUrl + '" target="_blank" style="flex:1;min-width:120px;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 8px;background:var(--surface2);border:1px solid var(--gold);border-radius:10px;color:var(--gold);font-size:12px;font-weight:600;text-decoration:none;letter-spacing:0.5px">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'
+      + 'Buscar portada</a>'
+      + '<a href="' + googleBooksUrl + '" target="_blank" style="flex:1;min-width:120px;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text2);font-size:12px;font-weight:600;text-decoration:none;letter-spacing:0.5px">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>'
+      + 'Buscar en Google</a>'
+      + '</div>'
+      + '<div style="margin-top:10px;font-size:11px;color:var(--text3);line-height:1.4">Copia la URL de la portada y pégala en el campo de arriba</div>'
+      + '</div>';
     return;
   }
 
