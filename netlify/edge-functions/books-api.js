@@ -13,6 +13,7 @@
 const BOOKS_KEY  = "books-v1";
 const COVERS_KEY = "covers-v1";
 const WALLET_KEY = "wallet-v1";
+const FUNKOS_KEY = "funkos-v1";
 
 const SITE_ID     = "8049dab7-42eb-410b-b1a8-d96822f0850f"; // gothamlibrary-emefreak-new
 const OLD_SITE_ID = "cc7277d9-b462-412f-b844-12837810a0cc"; // gothamlibrary-old (solo lectura)
@@ -103,6 +104,24 @@ export default async (request) => {
       return json({ ok: true });
     }
 
+    // ── FUNKOS ────────────────────────────────────────────────
+    // GET devuelve null si todavía no existe (la app carga entonces la colección inicial)
+    if (path === "/api/funkos" && request.method === "GET") {
+      return json(await rawGet(NEW_BASE, FUNKOS_KEY));
+    }
+
+    if (path === "/api/funkos" && request.method === "POST") {
+      const body = await request.json();
+      if (!Array.isArray(body)) return json({ error: "Expected array" }, 400);
+      const existing = (await rawGet(NEW_BASE, FUNKOS_KEY)) ?? [];
+      if (existing.length - body.length > MAX_DROP) {
+        return json({ error: "Guardado bloqueado: faltarían demasiados Funkos", existing: existing.length, received: body.length }, 409);
+      }
+      if (existing.length) await blobSet("funkos-prev", existing);
+      await blobSet(FUNKOS_KEY, body);
+      return json({ ok: true, count: body.length });
+    }
+
     // ── ALCANCÍA ──────────────────────────────────────────────
     if (path === "/api/wallet" && request.method === "GET") {
       return json((await blobGet(WALLET_KEY)) ?? { balance: 0, txs: [] });
@@ -121,5 +140,5 @@ export default async (request) => {
 };
 
 export const config = {
-  path: ["/api/books", "/api/covers", "/api/wallet"],
+  path: ["/api/books", "/api/covers", "/api/wallet", "/api/funkos"],
 };
