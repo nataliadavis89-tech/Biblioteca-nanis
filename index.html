@@ -338,12 +338,16 @@ select.field-input option{background:var(--surface)}
 .fk-stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
 .fk-stat b{font-family:'Bebas Neue',sans-serif;font-size:28px;font-weight:400;color:var(--gold);line-height:1}
 .fk-stat span{font-size:11px;color:var(--text2)}
+.fk-stat[onclick]{cursor:pointer}.fk-stat[onclick]:active{background:var(--surface2)}
+.fk-stat-on{border-color:var(--gold)}
 .fk-shelf{margin-top:18px}
 .fk-shelf-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 16px 10px}
 .fk-shelf-head span:first-child{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:2px;color:var(--text)}
 .fk-count{font-size:12px;color:var(--text2)}
 .fk-row{display:flex;gap:0;overflow-x:auto;padding:0 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .fk-row::-webkit-scrollbar{display:none}
+.fk-wrap{flex-wrap:wrap;row-gap:16px;overflow:visible;justify-content:flex-start}
+.fk-wrap .fk-item{flex:0 0 33.33%}
 .fk-item{flex:0 0 96px;display:flex;flex-direction:column;align-items:center;cursor:pointer}
 .fk-item:active{opacity:.75}
 .fk-fig{position:relative;width:86px;height:100px;border-radius:12px 12px 4px 4px;overflow:hidden;background:var(--surface2);border:1px solid var(--border);border-bottom:none;display:flex;align-items:center;justify-content:center}
@@ -363,6 +367,17 @@ select.field-input option{background:var(--surface)}
 .fk-del{width:100%;margin-top:12px;padding:13px;border-radius:12px;background:none;border:1px solid rgba(231,76,60,.35);color:var(--red);font-size:14px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer}
 .fk-del.armed{background:var(--red);color:#fff}
 #funko-screen{z-index:820}
+.fk-res{display:flex;gap:12px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-bottom:8px;cursor:pointer}
+.fk-res:active{background:var(--surface2)}
+.fk-res img,.fk-res-img{width:54px;height:54px;border-radius:8px;object-fit:cover;background:#fff;flex-shrink:0}
+.fk-res-meta{flex:1;min-width:0}
+.fk-res-name{font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fk-res-sub{font-size:12px;color:var(--text2);margin-top:2px}
+.fk-res-sub b{color:var(--gold);font-weight:600}
+.fk-res-extra{font-size:11px;color:var(--text3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fk-res-msg{font-size:12px;color:var(--text3);padding:6px 2px 10px}
+.fk-res-src{font-size:10px;color:var(--text3);text-align:right;margin:-2px 2px 8px}
+.fk-or{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);text-align:center;margin:10px 0 14px}
 </style>
 </head>
 <body>
@@ -420,6 +435,7 @@ select.field-input option{background:var(--surface)}
       <div class="logo"><div class="logo-icon"><svg viewBox="0 0 24 24"><path d="M12 2C8 2 5 5 5 9c0 2 .8 3.8 2 5l-1 8h12l-1-8c1.2-1.2 2-3 2-5 0-4-3-7-7-7z"/></svg></div><div class="logo-text"><span class="logo-title">GOTHAM</span><span class="logo-sub">Funkos</span></div></div>
       <div class="topbar-actions"><div class="icon-btn" title="Perfil" onclick="goScreen('profile')"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div></div>
     </div></div>
+    <div class="search-bar"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input type="text" id="fk-search" placeholder="Buscar por nombre, número o serie…" oninput="renderFunkos()" autocomplete="off"></div>
     <div id="funkos-content"></div>
   </div>
   <div class="detail-screen" id="detail-screen"></div>
@@ -534,7 +550,7 @@ async function loadFunkos(){
     if(r.ok){
       const remote = await r.json();
       if(Array.isArray(remote)){
-        funkos = remote; idbSet('funkos', funkos); renderFunkos(); return;
+        funkos = remote; idbSet('funkos', funkos); renderFunkos(); if(curScreen==='profile') renderProfile(); return;
       }
       if(remote === null && !funkos.length){
         // Primera vez: se carga la colección identificada en las fotos
@@ -558,20 +574,30 @@ function setFunkoCat(c){ funkoCat = c; renderFunkos(); }
 
 function renderFunkos(){
   const el = document.getElementById('funkos-content'); if(!el) return;
-  const owned = funkos.filter(f=>f.status !== 'wishlist');
-  const wish = funkos.filter(f=>f.status === 'wishlist');
+  const allOwned = funkos.filter(f=>f.status !== 'wishlist');
+  const allWish = funkos.filter(f=>f.status === 'wishlist');
+  const qi = document.getElementById('fk-search');
+  const q = (qi && qi.value || '').trim().toLowerCase().replace(/^#/,'');
+  const norm = t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const match = f=>!q || [f.name,f.number,f.franchise,f.category,f.notes].some(v=>norm(v).includes(norm(q)));
+  const owned = allOwned.filter(match);
+  const wish = allWish.filter(match);
   const cats = funkoCats();
-  const chips = ['Todos'].concat(cats.filter(c=>owned.some(f=>f.category===c)), wish.length ? ['Wishlist'] : [])
+  const chips = ['Todos'].concat(allWish.length ? ['Wishlist'] : [], cats.filter(c=>allOwned.some(f=>f.category===c)))
     .map(c=>`<div class="filter-chip${c===funkoCat?' active':''}" onclick="setFunkoCat('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</div>`).join('');
 
   let groups;
-  if(funkoCat === 'Wishlist') groups = [['WISHLIST', wish]];
-  else groups = cats.filter(c=>funkoCat==='Todos'||c===funkoCat).map(c=>[c.toUpperCase(), owned.filter(f=>f.category===c)]).filter(g=>g[1].length);
+  if(q) groups = [['RESULTADOS', owned.concat(wish)]].filter(g=>g[1].length);
+  else if(funkoCat === 'Wishlist') groups = [['WISHLIST', wish]];
+  else {
+    groups = cats.filter(c=>funkoCat==='Todos'||c===funkoCat).map(c=>[c.toUpperCase(), owned.filter(f=>f.category===c)]).filter(g=>g[1].length);
+    if(funkoCat==='Todos' && wish.length) groups.push(['WISHLIST', wish]);
+  }
 
   const shelf = ([title, items])=>`
     <div class="fk-shelf">
       <div class="fk-shelf-head"><span>${esc(title)}</span><span class="fk-count">${items.length} ${items.length===1?'figura':'figuras'}</span></div>
-      <div class="fk-row">${items.map(f=>`
+      <div class="fk-row${q?' fk-wrap':''}">${items.map(f=>`
         <div class="fk-item" onclick="openFunko('${f.id}')">
           <div class="fk-fig">${f.photo?`<img src="${f.photo}" alt="">`:`<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M6 21v-3a6 6 0 0112 0v3"/></svg>`}
             ${f.format==='afiche'?'<span class="fk-tag">AFICHE</span>':''}${f.format==='mini'?'<span class="fk-tag">MINI</span>':''}</div>
@@ -584,19 +610,19 @@ function renderFunkos(){
 
   el.innerHTML = `
     <div class="fk-stats">
-      <div class="fk-stat"><b>${owned.length}</b><span>en la colección</span></div>
-      <div class="fk-stat"><b>${new Set(owned.map(f=>f.category)).size}</b><span>categorías</span></div>
-      <div class="fk-stat"><b>${wish.length}</b><span>en wishlist</span></div>
+      <div class="fk-stat" onclick="setFunkoCat('Todos')"><b>${allOwned.length}</b><span>en la colección</span></div>
+      <div class="fk-stat"><b>${new Set(allOwned.map(f=>f.category)).size}</b><span>categorías</span></div>
+      <div class="fk-stat${funkoCat==='Wishlist'?' fk-stat-on':''}" onclick="setFunkoCat('Wishlist')"><b>${allWish.length}</b><span>en wishlist ›</span></div>
     </div>
     <div class="filter-row" style="padding-top:14px">${chips}</div>
-    ${groups.length ? groups.map(shelf).join('') : `<p style="font-size:13px;color:var(--text3);padding:24px 16px;text-align:center">Aún no hay Funkos aquí. Pulsa <b style="color:var(--gold)">+</b> para añadir uno.</p>`}`;
+    ${groups.length ? groups.map(shelf).join('') : `<p style="font-size:13px;color:var(--text3);padding:24px 16px;text-align:center">${q ? 'Ningún Funko coincide con «'+esc(q)+'».' : 'Aún no hay Funkos aquí.'} Pulsa <b style="color:var(--gold)">+</b> para añadir uno.</p>`}`;
 }
 
 // ── Ficha / alta de Funko ──────────────────────────────────────────
 function openFunko(id){
   const f = id ? funkos.find(x=>x.id===id) : null;
   funkoEditId = f ? f.id : null;
-  funkoDelArmed = false;
+  funkoDelArmed = false; _fkQ = ''; _fkRes = [];
   funkoForm = f ? {...f} : {id:'fk'+Date.now()+Math.random().toString(36).slice(2,6), name:'', number:'', franchise:'', category: (funkoCat!=='Todos'&&funkoCat!=='Wishlist')?funkoCat:'DC', format:'pop', status: funkoCat==='Wishlist'?'wishlist':'tengo', photo:'', notes:'', addedAt:Date.now()};
   renderFunkoForm();
   const s = document.getElementById('funko-screen'); s.classList.add('open'); s.scrollTop = 0; updFab();
@@ -620,6 +646,10 @@ function renderFunkoForm(){
       <div class="icon-btn" onclick="closeFunko()" style="width:44px;height:44px"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>
     </div>
     <div class="add-body">
+      ${funkoEditId ? '' : `<div class="field-label">Buscar en el catálogo</div>
+      <div class="search-bar" style="margin:0 0 8px"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input type="text" id="fk-q" value="${esc(_fkQ)}" placeholder="Nombre o número (ej. Ryuk, 2382)" oninput="fkSearch(this.value)" autocomplete="off"></div>
+      <div id="fk-results">${fkResultsHtml()}</div>
+      <div class="fk-or">o rellénalo a mano</div>`}
       <div class="fk-photo">${f.photo?`<img src="${f.photo}" alt="">`:`<div class="fk-photo-empty">Haz una foto al Funko</div>`}</div>
       <div style="display:flex;gap:8px;margin:10px 0 18px">
         <label class="fk-btn fk-btn-gold">Cámara<input type="file" accept="image/*" capture="environment" style="display:none" onchange="fkPhoto(this)"></label>
@@ -680,6 +710,61 @@ function deleteFunko(){
   if(!funkoDelArmed){ funkoDelArmed = true; const b=document.getElementById('fk-del'); if(b){ b.textContent='Pulsa otra vez para eliminar'; b.classList.add('armed'); } return; }
   funkos = funkos.filter(x=>x.id!==funkoEditId);
   saveFunkos(); renderFunkos(); closeFunko(); showToast('Funko eliminado');
+}
+
+// ── Buscador de catálogo ──
+let _fkT = null, _fkQ = '', _fkRes = [];
+function fkSearch(v){
+  _fkQ = v; clearTimeout(_fkT);
+  _fkT = setTimeout(async()=>{
+    const q = _fkQ.trim(); const box = document.getElementById('fk-results'); if(!box) return;
+    if(q.length < 2){ _fkRes = []; box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="fk-res-msg">Buscando…</div>';
+    let res = [];
+    try{ const r = await fetch('/api/funko-search?q=' + encodeURIComponent(q)); if(r.ok) res = await r.json(); }catch(e){}
+    if(q !== _fkQ.trim()) return;
+    _fkRes = Array.isArray(res) ? res : [];
+    const b2 = document.getElementById('fk-results'); if(b2) b2.innerHTML = fkResultsHtml();
+  }, 400);
+}
+function fkResultsHtml(){
+  if(!_fkRes.length) return _fkQ.trim().length >= 2 ? '<div class="fk-res-msg">Sin resultados. Prueba con otro nombre o rellénalo a mano.</div>' : '';
+  return _fkRes.map((x,i)=>`<div class="fk-res" onclick="fkUse(${i})">${x.image?`<img src="${x.image}" alt="" loading="lazy">`:'<div class="fk-res-img"></div>'}<div class="fk-res-meta"><div class="fk-res-name">${esc(x.name)}</div><div class="fk-res-sub">${x.number?'<b>#'+esc(x.number)+'</b> · ':''}${esc(x.franchise)}</div>${x.extra?`<div class="fk-res-extra">${esc(x.extra)}</div>`:''}</div></div>`).join('') + '<div class="fk-res-src">Datos del catálogo de popfigures.com</div>';
+}
+function fkGuessCat(t){
+  t = String(t||'').toLowerCase();
+  if(/batman|joker|harley|superman|wonder woman|gotham|dc comics|dc super|justice league|aquaman|suicide squad|catwoman|robin|nightwing|penguin|riddler/.test(t)) return 'DC';
+  if(/marvel|spider|avengers|x-men|deadpool|iron man|thor|loki|wolverine|guardians|venom/.test(t)) return 'Marvel';
+  if(/horror|friday the 13th|halloween|nosferatu|universal monsters|dracula|frankenstein|scream|chucky|child's play|trick 'r treat|pennywise|\bit\b|saw|conjuring|chainsaw|elm street|beetlejuice/.test(t)) return 'Terror';
+  if(/death note|naruto|dragon ball|one piece|demon slayer|jujutsu|attack on titan|my hero|anime|hunter x|bleach|sailor moon|ghibli|chainsaw man/.test(t)) return 'Anime';
+  if(/\brocks\b|kiss|metallica|queen|beatles|iron maiden|alice cooper|elvis|ozzy|motley|slipknot|avril/.test(t)) return 'Músicos';
+  return '';
+}
+function fkUse(i){
+  const x = _fkRes[i]; if(!x || !funkoForm) return;
+  funkoForm.name = x.name; funkoForm.number = x.number || ''; funkoForm.franchise = x.franchise || '';
+  if(x.image && !String(funkoForm.photo||'').startsWith('data:')) funkoForm.photo = x.image;
+  const g = fkGuessCat([x.franchise, x.name, x.extra].join(' ')); if(g) funkoForm.category = g;
+  _fkRes = []; _fkQ = '';
+  renderFunkoForm(); showToast('✓ Datos cargados — revisa y guarda');
+}
+
+function funkoProfileHtml(){
+  const owned = funkos.filter(f=>f.status!=='wishlist'), wish = funkos.filter(f=>f.status==='wishlist');
+  const byCat = {}; owned.forEach(f=>{ byCat[f.category] = (byCat[f.category]||0) + 1; });
+  const top = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+  const max = top.length ? top[0][1] : 1;
+  const withNum = owned.filter(f=>f.number).length;
+  return `
+    <div class="section-header" style="margin-top:8px"><span class="section-title">Funkos</span><span class="section-link" onclick="goScreen('funkos')">Ver estantería →</span></div>
+    <div class="fk-stats" style="padding-top:0">
+      <div class="fk-stat" onclick="goScreen('funkos')"><b>${owned.length}</b><span>en la colección</span></div>
+      <div class="fk-stat" onclick="funkoCat='Wishlist';goScreen('funkos')"><b>${wish.length}</b><span>en wishlist</span></div>
+      <div class="fk-stat"><b>${withNum}</b><span>con número</span></div>
+    </div>
+    ${top.length ? `<div style="margin:10px 16px 0;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+      ${top.map(([c,n])=>`<div style="display:flex;align-items:center;gap:10px"><span style="width:92px;font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c)}</span><div style="flex:1;height:6px;background:var(--surface3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.round(n/max*100)}%;background:var(--gold);border-radius:3px"></div></div><span style="width:22px;text-align:right;font-size:12px;color:var(--text)">${n}</span></div>`).join('')}
+    </div>` : ''}`;
 }
 
 function navAdd(){ if(curScreen === 'funkos') openFunko(null); else openAdd(); }
@@ -1319,11 +1404,12 @@ function renderProfile(){
     ${extraMetrics}
     ${genreChart}
     ${authorChart}
+    ${funkoProfileHtml()}
     <!-- BACKUP / RESTORE -->
     <div class="section-header" style="margin-top:8px"><span class="section-title">Copia de seguridad</span></div>
     <div style="padding:0 16px 32px;display:flex;flex-direction:column;gap:10px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
-        <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">Exporta todos tus libros y portadas a un archivo <strong style="color:var(--text)">.json</strong> que puedes guardar en tu móvil, iCloud o Google Drive.</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5">Exporta todos tus libros, portadas y Funkos a un archivo <strong style="color:var(--text)">.json</strong> que puedes guardar en tu móvil, iCloud o Google Drive.</div>
         <button onclick="exportBackup()" style="width:100%;padding:13px;background:var(--gold);color:var(--bg);border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:0.5px">⬇ Exportar backup completo</button>
       </div>
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
@@ -2236,6 +2322,7 @@ async function exportBackup(){
     if(typeof walletBalance !== 'undefined'){
       exportData.wallet = { balance: walletBalance, txs: walletTxList || [] };
     }
+    exportData.funkos = funkos.map(f=>({...f}));
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2245,7 +2332,7 @@ async function exportBackup(){
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('✓ Backup exportado · ' + books.length + ' libros');
+    showToast('✓ Backup exportado · ' + books.length + ' libros · ' + funkos.length + ' Funkos');
   }catch(e){
     showToast('Error al exportar: ' + e.message);
   }
@@ -2282,6 +2369,9 @@ async function importBackup(input){
       try{ localStorage.setItem('gl_wallet', JSON.stringify({balance:walletBalance, txs:walletTxList})); }catch(e){}
     }
 
+    // Restore Funkos if present
+    if(Array.isArray(payload.funkos)){ funkos = payload.funkos; await saveFunkos(); renderFunkos(); }
+
     // Save to localStorage and push to cloud (with covers included)
     await saveBooks();
 
@@ -2289,7 +2379,7 @@ async function importBackup(input){
     if(typeof renderProfile === 'function') renderProfile();
 
     const coverCount = books.filter(b=>b.cover && b.cover.startsWith('data:')).length;
-    showToast('✓ ' + books.length + ' libros restaurados · ' + coverCount + ' portadas');
+    showToast('✓ ' + books.length + ' libros restaurados · ' + coverCount + ' portadas' + (Array.isArray(payload.funkos) ? ' · ' + funkos.length + ' Funkos' : ''));
 
   }catch(e){
     console.error('Import error:', e);
