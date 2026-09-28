@@ -62,6 +62,20 @@ async function blobGet(key) {
   return old;
 }
 
+// Convierte un producto del catálogo (popfigures.com) en datos de Funko
+function parseFunko(p) {
+  const t = String(p.title || "").replace(/\s*-\s*PREORDER\s*$/i, "").trim();
+  let name = t, number = "", rest = "";
+  const m = t.match(/^(.*?)\s*#\s*(\d+[A-Za-z]?)\s*(\([^)]*\))?\s*(.*)$/);
+  if (m) { name = (m[1] + (m[3] ? " " + m[3] : "")).trim(); number = m[2]; rest = m[4]; }
+  else { const k = t.search(/Funko/i); if (k > 0) { name = t.slice(0, k).trim(); rest = t.slice(k); } }
+  const parts = rest.split(/\s+-\s+/).slice(1);
+  let image = p.image || (p.featured_image && p.featured_image.url) || "";
+  if (image.startsWith("//")) image = "https:" + image;
+  if (image) image += (image.includes("?") ? "&" : "?") + "width=360";
+  return { name, number, franchise: (parts[0] || "").trim(), extra: parts.slice(1).join(" · "), image, line: p.product_type || "" };
+}
+
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: CORS });
 
 export default async (request) => {
@@ -122,6 +136,18 @@ export default async (request) => {
       return json({ ok: true, count: body.length });
     }
 
+    // ── BUSCADOR DE FUNKOS (catálogo público de popfigures.com) ──
+    if (path === "/api/funko-search" && request.method === "GET") {
+      const q = (new URL(request.url).searchParams.get("q") || "").trim();
+      if (q.length < 2) return json([]);
+      const u = `https://www.popfigures.com/search/suggest.json?q=${encodeURIComponent(q)}&resources[type]=product&resources[limit]=10`;
+      const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0 (GothamLibrary)" } });
+      if (!r.ok) return json([]);
+      const data = await r.json();
+      const prods = (data && data.resources && data.resources.results && data.resources.results.products) || [];
+      return json(prods.map(parseFunko).filter((x) => x.name));
+    }
+
     // ── ALCANCÍA ──────────────────────────────────────────────
     if (path === "/api/wallet" && request.method === "GET") {
       return json((await blobGet(WALLET_KEY)) ?? { balance: 0, txs: [] });
@@ -140,5 +166,5 @@ export default async (request) => {
 };
 
 export const config = {
-  path: ["/api/books", "/api/covers", "/api/wallet", "/api/funkos"],
+  path: ["/api/books", "/api/covers", "/api/wallet", "/api/funkos", "/api/funko-search"],
 };
