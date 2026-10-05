@@ -10,9 +10,15 @@ jobs:
         run: |
           set -u
           URL=https://gothamlibrary-emefreak-new.netlify.app
-          curl -sS -o books.json -w "GET /api/books -> %{http_code}, %{size_download} bytes\n" "$URL/api/books"
-          N=$(jq length books.json); echo "Libros en la nube: $N"
-          curl -sS -o resp.txt -w "POST /api/books (mismos datos, X-Count) -> %{http_code} en %{time_total}s\n" \
-            -X POST -H "Content-Type: application/json" -H "X-Count: $N" --data-binary @books.json "$URL/api/books"
-          echo "Respuesta:"; head -c 1500 resp.txt; echo
-          curl -sS -o resp2.txt -w "POST /api/wallet (prueba pequeña) -> %{http_code}\n" "$URL/api/wallet"
+          G=$(curl -sS -o books.json -w "%{http_code} %{size_download}" "$URL/api/books")
+          N=$(jq length books.json 2>/dev/null || echo "?")
+          echo "::notice title=GET::status/bytes=$G libros=$N"
+          P=$(curl -sS -o resp.txt -w "%{http_code} %{time_total}s" -X POST -H "Content-Type: application/json" -H "X-Count: $N" --data-binary @books.json "$URL/api/books")
+          BODY=$(head -c 600 resp.txt | tr '\n' ' ')
+          echo "::notice title=POST::$P :: $BODY"
+          # prueba con la mitad del tamaño (solo diagnóstico, NO se guarda: se manda a una ruta inexistente de la misma función)
+          head -c 3000000 books.json > half.bin
+          H=$(curl -sS -o r3.txt -w "%{http_code}" -X POST --data-binary @half.bin "$URL/api/nada")
+          echo "::notice title=POST3MB::$H :: $(head -c 200 r3.txt | tr '\n' ' ')"
+          F=$(curl -sS -o r4.txt -w "%{http_code}" -X POST --data-binary @books.json "$URL/api/nada")
+          echo "::notice title=POSTfull-otra-ruta::$F :: $(head -c 200 r4.txt | tr '\n' ' ')"
