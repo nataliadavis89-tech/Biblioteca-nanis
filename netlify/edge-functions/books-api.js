@@ -1,16 +1,18 @@
 // Gotham Library - Netlify Edge Function
 // Sin imports externos: fetch directo a la API REST de Netlify Blobs.
 //
-// - El token NO está en el código: se lee de la variable de entorno BLOBS_TOKEN
-//   (Netlify > Project configuration > Environment variables).
+// - El token NO está en el código: se lee de la variable de entorno BLOBS_TOKEN.
 // - Los datos se guardan en el store "gotham-library" de ESTE sitio
-//   (gothamlibrary-emefreak-new), visible en Data & storage > Blobs.
-// - La primera vez que se lee algo que aún no existe aquí, se copia desde el
-//   sitio antiguo (gothamlibrary-old). El sitio antiguo NO se modifica nunca.
+//   (gothamlibrary-emefreak-new). Si algo aún no existe aquí, se copia una vez
+//   desde el sitio antiguo (gothamlibrary-old), que nunca se modifica.
+// - IMPORTANTE (límite de CPU de Netlify, ~50 ms): la biblioteca pesa varios MB,
+//   así que los libros pasan como BYTES: no se decodifican ni se convierten a objetos.
 // - Protecciones: no se acepta una lista vacía ni una que borre muchos libros de
-//   golpe, y antes de cada guardado se conserva la versión anterior (books-prev).
+//   golpe (la app envía el número de libros en la cabecera X-Count), y una vez al
+//   día se guarda una copia del estado anterior en "books-prev".
 
 const BOOKS_KEY  = "books-v1";
+const META_KEY   = "books-meta";
 const COVERS_KEY = "covers-v1";
 const WALLET_KEY = "wallet-v1";
 const FUNKOS_KEY = "funkos-v1";
@@ -21,12 +23,12 @@ const OLD_SITE_ID = "cc7277d9-b462-412f-b844-12837810a0cc"; // gothamlibrary-old
 const NEW_BASE = `https://api.netlify.com/api/v1/blobs/${SITE_ID}/${encodeURIComponent("site:gotham-library")}`;
 const OLD_BASE = `https://api.netlify.com/api/v1/blobs/${OLD_SITE_ID}/gotham-library`;
 
-const MAX_DROP = 10; // máximo de libros que se pueden eliminar en un solo guardado
+const MAX_DROP = 10; // máximo de elementos que se pueden eliminar en un solo guardado
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, X-Count",
   "Content-Type": "application/json",
 };
 
@@ -36,30 +38,54 @@ function token() {
   return t;
 }
 
-async function rawGet(base, key) {
+// ── Acceso a Blobs como texto (sin parsear) ─────────────────────
+async function getText(base, key) {
   const r = await fetch(`${base}/${key}`, { headers: { Authorization: `Bearer ${token()}` } });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`GET ${key} failed: ${r.status}`);
   const text = await r.text();
-  return text ? JSON.parse(text) : null;
+  return text ? text : null;
 }
 
-async function blobSet(key, value) {
+// Bytes tal cual (sin decodificar): para la biblioteca, que pesa varios MB
+async function getBytes(base, key) {
+  const r = await fetch(`${base}/${key}`, { headers: { Authorization: `Bearer ${token()}` } });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GET ${key} failed: ${r.status}`);
+  const buf = await r.arrayBuffer();
+  return buf.byteLength ? buf : null;
+}
+
+async function putText(key, text) {
   const r = await fetch(`${NEW_BASE}/${key}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-    body: JSON.stringify(value),
+    body: text,
   });
   if (!r.ok) throw new Error(`PUT ${key} failed: ${r.status}`);
 }
 
 // Lee de este sitio; si aún no existe, lo copia una vez desde el sitio antiguo.
-async function blobGet(key) {
-  const current = await rawGet(NEW_BASE, key);
+async function getTextMigrating(key) {
+  const current = await getText(NEW_BASE, key);
   if (current !== null) return current;
-  const old = await rawGet(OLD_BASE, key);
-  if (old !== null) await blobSet(key, old);
+  const old = await getText(OLD_BASE, key);
+  if (old !== null) await putText(key, old);
   return old;
+}
+
+// Para datos pequeños (alcancía, Funkos, portadas antiguas) sí se parsea.
+async function getJSON(key, migrate = true) {
+  const t = migrate ? await getTextMigrating(key) : await getText(NEW_BASE, key);
+  return t === null ? null : JSON.parse(t);
+}
+const putJSON = (key, value) => putText(key, JSON.stringify(value));
+
+// Cuenta libros sin parsear todo el JSON: cada libro tiene un único "id" de primer nivel.
+// Solo se usa si la app no envía X-Count (versiones antiguas de la app).
+function roughCount(text) {
+  const m = text.match(/"id"\s*:/g);
+  return m ? m.length : 0;
 }
 
 // Convierte un producto del catálogo (popfigures.com) en datos de Funko
@@ -77,6 +103,7 @@ function parseFunko(p) {
 }
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: CORS });
+const raw = (text, status = 200) => new Response(text, { status, headers: CORS });
 
 export default async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -84,55 +111,72 @@ export default async (request) => {
   const path = new URL(request.url).pathname;
 
   try {
-    // ── LIBROS ────────────────────────────────────────────────
+    // ── LIBROS (como texto) ───────────────────────────────────
     if (path === "/api/books" && request.method === "GET") {
-      return json((await blobGet(BOOKS_KEY)) ?? []);
+      const r = await fetch(`${NEW_BASE}/${BOOKS_KEY}`, { headers: { Authorization: `Bearer ${token()}` } });
+      if (r.ok) return new Response(r.body, { headers: CORS });
+      if (r.status !== 404) throw new Error(`GET ${BOOKS_KEY} failed: ${r.status}`);
+      const old = await getBytes(OLD_BASE, BOOKS_KEY);      // primera vez: copiar del sitio antiguo
+      if (!old) return raw("[]");
+      await putText(BOOKS_KEY, old);
+      return new Response(old, { headers: CORS });
     }
 
     if (path === "/api/books" && request.method === "POST") {
-      const body = await request.json();
-      if (!Array.isArray(body)) return json({ error: "Expected array" }, 400);
+      const buf = new Uint8Array(await request.arrayBuffer());
+      let i = 0; while (i < buf.length && (buf[i] === 32 || buf[i] === 10 || buf[i] === 13 || buf[i] === 9)) i++;
+      if (buf[i] !== 0x5b) return json({ error: "Expected array" }, 400);   // debe empezar por "["
 
-      const existing = (await blobGet(BOOKS_KEY)) ?? [];
-      if (body.length === 0 && existing.length > 0) {
-        return json({ error: "Guardado bloqueado: la lista llegó vacía", existing: existing.length }, 409);
-      }
-      if (existing.length - body.length > MAX_DROP) {
-        return json({ error: "Guardado bloqueado: faltarían demasiados libros", existing: existing.length, received: body.length }, 409);
+      const header = parseInt(request.headers.get("x-count") || "", 10);
+      const count = Number.isFinite(header) ? header : roughCount(new TextDecoder().decode(buf));
+      if (count <= 0) return json({ error: "Guardado bloqueado: la lista llegó vacía" }, 409);
+
+      const meta = (await getJSON(META_KEY, false)) || {};
+      if (typeof meta.count === "number" && meta.count - count > MAX_DROP) {
+        return json({ error: "Guardado bloqueado: faltarían demasiados libros", existing: meta.count, received: count }, 409);
       }
 
-      if (existing.length) await blobSet("books-prev", existing);
-      await blobSet(BOOKS_KEY, body);
-      return json({ ok: true, count: body.length });
+      // Copia del estado anterior, una vez al día (sin parsear: texto tal cual)
+      const today = new Date().toISOString().slice(0, 10);
+      if (meta.prevDate !== today) {
+        const prev = await getBytes(NEW_BASE, BOOKS_KEY);
+        if (prev) await putText("books-prev", prev);
+        meta.prevDate = today;
+      }
+
+      await putText(BOOKS_KEY, buf);
+      await putJSON(META_KEY, { ...meta, count, updatedAt: Date.now() });
+      return json({ ok: true, count });
     }
 
-    // ── PORTADAS ──────────────────────────────────────────────
+    // ── PORTADAS (sistema antiguo) ────────────────────────────
     if (path === "/api/covers" && request.method === "GET") {
-      return json((await blobGet(COVERS_KEY)) ?? {});
+      return raw((await getTextMigrating(COVERS_KEY)) ?? "{}");
     }
 
     if (path === "/api/covers" && request.method === "POST") {
       const body = await request.json();
-      const existing = (await blobGet(COVERS_KEY)) ?? {};
-      await blobSet(COVERS_KEY, { ...existing, ...body });
+      const existing = (await getJSON(COVERS_KEY)) ?? {};
+      await putJSON(COVERS_KEY, { ...existing, ...body });
       return json({ ok: true });
     }
 
     // ── FUNKOS ────────────────────────────────────────────────
     // GET devuelve null si todavía no existe (la app carga entonces la colección inicial)
     if (path === "/api/funkos" && request.method === "GET") {
-      return json(await rawGet(NEW_BASE, FUNKOS_KEY));
+      return raw((await getText(NEW_BASE, FUNKOS_KEY)) ?? "null");
     }
 
     if (path === "/api/funkos" && request.method === "POST") {
       const body = await request.json();
       if (!Array.isArray(body)) return json({ error: "Expected array" }, 400);
-      const existing = (await rawGet(NEW_BASE, FUNKOS_KEY)) ?? [];
+      const prevText = await getText(NEW_BASE, FUNKOS_KEY);
+      const existing = prevText ? JSON.parse(prevText) : [];
       if (existing.length - body.length > MAX_DROP) {
         return json({ error: "Guardado bloqueado: faltarían demasiados Funkos", existing: existing.length, received: body.length }, 409);
       }
-      if (existing.length) await blobSet("funkos-prev", existing);
-      await blobSet(FUNKOS_KEY, body);
+      if (prevText) await putText("funkos-prev", prevText);
+      await putJSON(FUNKOS_KEY, body);
       return json({ ok: true, count: body.length });
     }
 
@@ -150,12 +194,12 @@ export default async (request) => {
 
     // ── ALCANCÍA ──────────────────────────────────────────────
     if (path === "/api/wallet" && request.method === "GET") {
-      return json((await blobGet(WALLET_KEY)) ?? { balance: 0, txs: [] });
+      return json((await getJSON(WALLET_KEY)) ?? { balance: 0, txs: [] });
     }
 
     if (path === "/api/wallet" && request.method === "POST") {
       const body = await request.json();
-      await blobSet(WALLET_KEY, body);
+      await putJSON(WALLET_KEY, body);
       return json({ ok: true });
     }
   } catch (e) {
