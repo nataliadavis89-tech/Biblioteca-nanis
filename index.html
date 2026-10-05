@@ -959,7 +959,17 @@ async function loadBooks(){
     if(!Array.isArray(cached)||!cached.length){ const ls=localStorage.getItem('gl_books_v4'); if(ls) cached=JSON.parse(ls); }
     if(Array.isArray(cached)&&cached.length&&!books.length){ books=cached; renderHome(); renderLibrary(); renderWishlist(); }
   }catch(e){}
-  // 2) La nube manda
+  // 2) Si quedaron cambios sin subir en este móvil, NO se pisan con la nube: se suben
+  try{
+    if(books.length && await idbGet('books_pending')){
+      renderHome(); renderLibrary(); renderWishlist();
+      showToast('Subiendo cambios pendientes…');
+      await saveBooks();
+      if(!(await idbGet('books_pending'))) showToast('✓ Cambios pendientes guardados');
+      return;
+    }
+  }catch(e){}
+  // 3) La nube manda
   try{
     const resp=await fetch('/api/books',{cache:'no-store'});
     if(resp.ok){
@@ -973,6 +983,8 @@ async function loadBooks(){
   }catch(e){ console.warn('Cloud unavailable, using local:',e); }
   renderHome(); renderLibrary(); renderWishlist();
   if(!books.length) showToast('⚠️ No se pudo cargar la biblioteca — pulsa ↻');
+  // Una sola vez: sacar las portadas incrustadas de la lista (la aligera de ~10 MB a pocos cientos de KB)
+  else if(books.some(b=>isDataCover(b.cover))) saveBooks();
 }
 
 async function injectLocalCovers(bookList){
@@ -1025,31 +1037,56 @@ async function loadAndInjectCovers(bookList){
 
 
 // ── GUARDAR LIBROS ────────────────────────────────────────────────
+// ── PORTADAS: cada una se sube aparte y el libro guarda solo su dirección ──
+const isDataCover = c => typeof c === 'string' && c.startsWith('data:');
+async function uploadCover(id, dataUrl){
+  const r = await fetch('/api/cover/' + encodeURIComponent(id), {method:'POST', headers:{'Content-Type':'text/plain'}, body:dataUrl});
+  if(!r.ok) throw new Error('portada ' + r.status);
+  return (await r.json()).url;
+}
+async function externalizeCovers(){
+  const todo = books.filter(b=>isDataCover(b.cover) && /^[A-Za-z0-9_-]{1,100}$/.test(b.id));
+  let done = 0;
+  for(const b of todo){
+    try{ const url = await uploadCover(b.id, b.cover); b.cover = url; coverCache[b.id] = url; done++; }
+    catch(e){ console.warn('No se pudo subir la portada', b.id, e); }
+  }
+  return done;
+}
+async function urlToDataUrl(u){
+  const r = await fetch(u); if(!r.ok) throw new Error(r.status);
+  const blob = await r.blob();
+  return await new Promise((res, rej)=>{ const fr = new FileReader(); fr.onload = ()=>res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob); });
+}
+
+let _savingBooks = false, _saveAgain = false;
 async function saveBooks(){
   if(!books.length) return; // nunca subir una biblioteca vacía
-  const forCloud=books.map(b=>({...b}));
-  idbSet('books',forCloud);
+  if(_savingBooks){ _saveAgain = true; return; }
+  _savingBooks = true;
   try{
-    const r=await fetch('/api/books',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(forCloud)});
-    if(r.status===409){ showToast('⚠️ Guardado bloqueado por seguridad — recargando'); loadBooks(); }
-    else if(!r.ok){ showToast('⚠️ No se pudo guardar en la nube (queda en el móvil)'); }
-  }catch(e){ console.warn('Cloud save failed (data safe locally):',e); }
+    await idbSet('books', books.map(b=>({...b})));
+    await idbSet('books_pending', true);   // hay cambios sin subir
+    const n = books.filter(b=>isDataCover(b.cover)).length;
+    if(n > 3) showToast('Optimizando ' + n + ' portadas…');
+    if(n) await externalizeCovers();
+    const forCloud = books.map(b=>({...b}));
+    await idbSet('books', forCloud);
+    const r = await fetch('/api/books', {method:'POST', headers:{'Content-Type':'application/json','X-Count':String(forCloud.length)}, body:JSON.stringify(forCloud)});
+    if(r.ok){ await idbSet('books_pending', false); if(n > 3) showToast('✓ Portadas optimizadas y guardado'); }
+    else if(r.status === 409){ showToast('⚠️ Guardado bloqueado por seguridad — revisa antes de seguir'); }
+    else { let m=''; try{ m=(await r.json()).error||''; }catch(e){} showToast('⚠️ No se pudo guardar en la nube (queda en el móvil)' + (m ? ' · ' + m : ' · error ' + r.status)); }
+  }catch(e){ console.warn('Cloud save failed (data safe locally):', e); showToast('⚠️ Sin conexión — guardado en el móvil'); }
+  finally{
+    _savingBooks = false;
+    if(_saveAgain){ _saveAgain = false; saveBooks(); }
+  }
 }
 
 
 
 async function saveCoverToCloud(bookId, base64Cover){
-  try{
-    const s=localStorage.getItem('gl_covers_v1');
-    const c=s?JSON.parse(s):{};
-    c[bookId]=base64Cover;
-    localStorage.setItem('gl_covers_v1',JSON.stringify(c));
-  }catch(e){}
-  fetch('/api/covers',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({[bookId]:base64Cover})
-  }).catch(e=>console.warn('Cover cloud save failed:',e));
+  // Obsoleto: saveBooks() sube cada portada por separado (/api/cover/<id>)
 }
 
 
@@ -2317,7 +2354,11 @@ async function exportBackup(){
     const exportData = {
       version: 3,
       exportDate: new Date().toISOString(),
-      books: books.map(b=>({...b}))
+      books: await Promise.all(books.map(async b=>{
+        const c = {...b};
+        if(typeof c.cover === 'string' && c.cover.startsWith('/api/cover/')){ try{ c.cover = await urlToDataUrl(c.cover); }catch(e){} }
+        return c;
+      }))
     };
     if(typeof walletBalance !== 'undefined'){
       exportData.wallet = { balance: walletBalance, txs: walletTxList || [] };

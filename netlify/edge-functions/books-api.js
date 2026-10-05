@@ -10,6 +10,8 @@
 // - Protecciones: no se acepta una lista vacía ni una que borre muchos libros de
 //   golpe (la app envía el número de libros en la cabecera X-Count), y una vez al
 //   día se guarda una copia del estado anterior en "books-prev".
+// - Portadas: cada una se guarda aparte ("cover-<id>") y la lista de libros solo
+//   lleva su dirección (/api/cover/<id>?v=...). Así la lista pesa poco.
 
 const BOOKS_KEY  = "books-v1";
 const META_KEY   = "books-meta";
@@ -145,16 +147,33 @@ export default async (request) => {
       return json({ ok: true, count });
     }
 
-    // ── PORTADAS (sistema antiguo) ────────────────────────────
+    // ── PORTADA INDIVIDUAL: /api/cover/<id> ───────────────────
+    const cm = path.match(/^\/api\/cover\/([A-Za-z0-9_-]{1,100})$/);
+    if (cm && request.method === "GET") {
+      const t = await getText(NEW_BASE, "cover-" + cm[1]);
+      const m = t && t.match(/^data:([^;,]+);base64,(.*)$/s);
+      if (!m) return new Response("", { status: 404, headers: { "Access-Control-Allow-Origin": "*" } });
+      const bin = atob(m[2]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Response(bytes, { headers: { "Access-Control-Allow-Origin": "*", "Content-Type": m[1], "Cache-Control": "public, max-age=31536000, immutable" } });
+    }
+    if (cm && request.method === "POST") {
+      const t = (await request.text()).trim();
+      if (!/^data:image\/[a-z0-9+.-]+;base64,/i.test(t) || t.length > 3000000) return json({ error: "Imagen no válida" }, 400);
+      await putText("cover-" + cm[1], t);
+      return json({ ok: true, url: `/api/cover/${cm[1]}?v=${Date.now()}` });
+    }
+
+    // ── PORTADAS (sistema antiguo, solo lectura) ──────────────
     if (path === "/api/covers" && request.method === "GET") {
       return raw((await getTextMigrating(COVERS_KEY)) ?? "{}");
     }
 
     if (path === "/api/covers" && request.method === "POST") {
-      const body = await request.json();
-      const existing = (await getJSON(COVERS_KEY)) ?? {};
-      await putJSON(COVERS_KEY, { ...existing, ...body });
-      return json({ ok: true });
+      // Obsoleto: las portadas ahora van por /api/cover/<id>. (Fusionar este archivo
+      // de varios MB superaba el límite de CPU.)
+      return json({ ok: true, ignored: true });
     }
 
     // ── FUNKOS ────────────────────────────────────────────────
@@ -206,5 +225,5 @@ export default async (request) => {
 };
 
 export const config = {
-  path: ["/api/books", "/api/covers", "/api/wallet", "/api/funkos", "/api/funko-search"],
+  path: ["/api/books", "/api/covers", "/api/cover/*", "/api/wallet", "/api/funkos", "/api/funko-search"],
 };

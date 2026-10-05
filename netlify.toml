@@ -17,3 +17,7 @@
 [[edge_functions]]
   path = "/api/funko-search"
   function = "books-api"
+
+[[edge_functions]]
+  path = "/api/cover/*"
+  function = "books-api"
