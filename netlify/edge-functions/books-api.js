@@ -81,13 +81,6 @@ async function getJSON(key, migrate = true) {
 }
 const putJSON = (key, value) => putText(key, JSON.stringify(value));
 
-// Cuenta libros sin parsear todo el JSON: cada libro tiene un único "id" de primer nivel.
-// Solo se usa si la app no envía X-Count (versiones antiguas de la app).
-function roughCount(text) {
-  const m = text.match(/"id"\s*:/g);
-  return m ? m.length : 0;
-}
-
 // Convierte un producto del catálogo (popfigures.com) en datos de Funko
 function parseFunko(p) {
   const t = String(p.title || "").replace(/\s*-\s*PREORDER\s*$/i, "").trim();
@@ -127,12 +120,15 @@ export default async (request) => {
       let i = 0; while (i < buf.length && (buf[i] === 32 || buf[i] === 10 || buf[i] === 13 || buf[i] === 9)) i++;
       if (buf[i] !== 0x5b) return json({ error: "Expected array" }, 400);   // debe empezar por "["
 
+      // La app envía el número de libros en X-Count. Las versiones antiguas no lo envían:
+      // contarlo leyendo 10 MB supera el límite de CPU, así que en ese caso solo se
+      // comprueba que la lista no venga vacía.
       const header = parseInt(request.headers.get("x-count") || "", 10);
-      const count = Number.isFinite(header) ? header : roughCount(new TextDecoder().decode(buf));
-      if (count <= 0) return json({ error: "Guardado bloqueado: la lista llegó vacía" }, 409);
+      const count = Number.isFinite(header) ? header : null;
+      if (count === 0 || buf.length < 50) return json({ error: "Guardado bloqueado: la lista llegó vacía" }, 409);
 
       const meta = (await getJSON(META_KEY, false)) || {};
-      if (typeof meta.count === "number" && meta.count - count > MAX_DROP) {
+      if (count !== null && typeof meta.count === "number" && meta.count - count > MAX_DROP) {
         return json({ error: "Guardado bloqueado: faltarían demasiados libros", existing: meta.count, received: count }, 409);
       }
 
@@ -145,7 +141,7 @@ export default async (request) => {
       }
 
       await putText(BOOKS_KEY, buf);
-      await putJSON(META_KEY, { ...meta, count, updatedAt: Date.now() });
+      await putJSON(META_KEY, { ...meta, ...(count !== null ? { count } : {}), updatedAt: Date.now() });
       return json({ ok: true, count });
     }
 
