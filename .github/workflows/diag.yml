@@ -1,0 +1,18 @@
+name: Diagnóstico guardado
+on:
+  push:
+    branches: [diag-guardado]
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probar GET y POST de libros
+        run: |
+          set -u
+          URL=https://gothamlibrary-emefreak-new.netlify.app
+          curl -sS -o books.json -w "GET /api/books -> %{http_code}, %{size_download} bytes\n" "$URL/api/books"
+          N=$(jq length books.json); echo "Libros en la nube: $N"
+          curl -sS -o resp.txt -w "POST /api/books (mismos datos, X-Count) -> %{http_code} en %{time_total}s\n" \
+            -X POST -H "Content-Type: application/json" -H "X-Count: $N" --data-binary @books.json "$URL/api/books"
+          echo "Respuesta:"; head -c 1500 resp.txt; echo
+          curl -sS -o resp2.txt -w "POST /api/wallet (prueba pequeña) -> %{http_code}\n" "$URL/api/wallet"
