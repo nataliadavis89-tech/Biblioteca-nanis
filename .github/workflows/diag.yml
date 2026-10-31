@@ -6,19 +6,29 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - run: sleep 75
-      - name: Sondear la app (solo lecturas)
+      - name: Revisar fotos de Funkos recientes (solo lectura)
         run: |
-          set -u
+          pip install -q pillow >/dev/null 2>&1
           URL=https://gothamlibrary-emefreak-new.netlify.app
-          n(){ echo "::notice title=$1::$2"; }
-          H=$(curl -sS -o home.html -w "%{http_code} %{size_download}B %{time_total}s" "$URL/"); n HOME "$H"
-          B=$(curl -sS -o books.json -w "%{http_code} %{size_download}B %{time_total}s" "$URL/api/books"); n BOOKS "$B :: $(jq -c '{n:length, data_covers:[.[]|select((.cover//"")|startswith("data:"))]|length, api_covers:[.[]|select((.cover//"")|startswith("/api/cover/"))]|length}' books.json 2>&1 | head -c 300)"
-          F=$(curl -sS -o funkos.json -w "%{http_code} %{size_download}B %{time_total}s" "$URL/api/funkos"); n FUNKOS "$F :: $(jq -c 'if type=="array" then {n:length, data_photos:[.[]|select((.photo//"")|startswith("data:"))]|length, photo_bytes:([.[]|(.photo//"")|length]|add)} else . end' funkos.json 2>&1 | head -c 300)"
-          W=$(curl -sS -o wallet.json -w "%{http_code} %{size_download}B" "$URL/api/wallet"); n WALLET "$W :: $(head -c 150 wallet.json)"
-          C=$(jq -r '[.[]|select((.cover//"")|startswith("/api/cover/"))][0].cover // ""' books.json)
-          if [ -n "$C" ]; then R=$(curl -sS -o c.bin -w "%{http_code} %{size_download}B %{content_type} %{time_total}s" "$URL$C"); n COVER "$R"; fi
-          S=$(curl -sS -o s.json -w "%{http_code} %{time_total}s" "$URL/api/funko-search?q=batman"); n SEARCH "$S :: $(jq -c 'length' s.json 2>&1|head -c 80)"
-          O=$(curl -sS -o /dev/null -D h.txt -w "%{http_code}" -X OPTIONS "$URL/api/books"); n OPTIONS "$O :: $(grep -i 'access-control-allow-headers' h.txt | tr -d '\r')"
-          n INDEXVER "$(grep -c 'makeSync' home.html) makeSync · $(grep -c 'externalizeFunkoPhotos' home.html) funkoPhotos · size $(wc -c < home.html)"
-          for i in 1 2 3 4 5; do T=$(curl -sS -o /dev/null -w "%{http_code} %{time_total}s" "$URL/api/books"); echo "books try $i: $T"; done > tries.txt; n TRIES "$(tr '\n' ' ' < tries.txt)"
+          curl -sS "$URL/api/funkos" -o f.json
+          python3 - <<'PY'
+          import json, urllib.request, io
+          from PIL import Image
+          URL="https://gothamlibrary-emefreak-new.netlify.app"
+          fs=json.load(open("f.json"))
+          rec=sorted(fs,key=lambda f:f.get("addedAt") or 0)[-4:]
+          for f in rec:
+              p=f.get("photo") or ""
+              info=""
+              try:
+                  src=URL+p if p.startswith("/") else p
+                  if src:
+                      im=Image.open(io.BytesIO(urllib.request.urlopen(src,timeout=20).read()))
+                      rgb=im.convert("RGBA")
+                      w,h=rgb.size
+                      corners=[rgb.getpixel(xy) for xy in [(2,2),(w-3,2),(2,h-3),(w-3,h-3)]]
+                      info=f"{im.format} {im.mode} {w}x{h} esquinas={corners}"
+              except Exception as e: info="err "+str(e)[:80]
+              src_kind = "propia" if p.startswith("/api/cover/") else ("catálogo" if p.startswith("http") else ("vacía" if not p else p[:20]))
+              print(f"::notice title={f.get('name','?')[:40]}::foto {src_kind} · {info}")
+          PY
