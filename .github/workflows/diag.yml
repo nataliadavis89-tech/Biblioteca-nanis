@@ -16,7 +16,7 @@ jobs:
           from PIL import Image
           URL="https://gothamlibrary-emefreak-new.netlify.app"
           fs=json.load(open("f.json"))
-          rec=sorted(fs,key=lambda f:f.get("addedAt") or 0)[-4:]
+          rec=[f for f in fs if "edd" in (f.get("name","")+f.get("franchise","")).lower() or "edward" in f.get("name","").lower()] + sorted(fs,key=lambda f:f.get("updatedAt") or 0)[-2:]
           for f in rec:
               p=f.get("photo") or ""
               info=""
@@ -30,5 +30,5 @@ jobs:
                       info=f"{im.format} {im.mode} {w}x{h} esquinas={corners}"
               except Exception as e: info="err "+str(e)[:80]
               src_kind = "propia" if p.startswith("/api/cover/") else ("catálogo" if p.startswith("http") else ("vacía" if not p else p[:20]))
-              print(f"::notice title={f.get('name','?')[:40]}::foto {src_kind} · {info}")
+              print(f"::notice title={f.get('name','?')[:40]}::foto {src_kind} {p[:60]} · upd={f.get('updatedAt')} · {info}")
           PY
