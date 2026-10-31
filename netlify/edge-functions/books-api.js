@@ -5,19 +5,21 @@
 // - Los datos se guardan en el store "gotham-library" de ESTE sitio
 //   (gothamlibrary-emefreak-new). Si algo aún no existe aquí, se copia una vez
 //   desde el sitio antiguo (gothamlibrary-old), que nunca se modifica.
-// - IMPORTANTE (límite de CPU de Netlify, ~50 ms): la biblioteca pesa varios MB,
-//   así que los libros pasan como BYTES: no se decodifican ni se convierten a objetos.
-// - Protecciones: no se acepta una lista vacía ni una que borre muchos libros de
-//   golpe (la app envía el número de libros en la cabecera X-Count), y una vez al
-//   día se guarda una copia del estado anterior en "books-prev".
-// - Portadas: cada una se guarda aparte ("cover-<id>") y la lista de libros solo
-//   lleva su dirección (/api/cover/<id>?v=...). Así la lista pesa poco.
+// - Portadas de libros y fotos de Funkos se guardan cada una aparte
+//   ("cover-<id>"); las listas solo llevan su dirección (/api/cover/<id>?v=...).
+//   Así las listas pesan pocos KB y caben de sobra en el límite de CPU (~50 ms).
+// - GUARDADO POR CAMBIOS (dos personas a la vez): la app envía solo lo que ha
+//   cambiado { upserts: [...], deletes: [ids] } y el servidor lo MEZCLA con lo
+//   que ya hay, elemento a elemento, usando "updatedAt". Nadie pisa los cambios
+//   del otro. La respuesta es la lista completa ya mezclada.
+// - Protecciones: no se borran más de MAX_DELETES elementos en un guardado, no se
+//   acepta dejar la lista vacía, y una vez al día se guarda una copia del estado
+//   anterior ("books-v1-prev" / "funkos-v1-prev").
 
 const BOOKS_KEY  = "books-v1";
-const META_KEY   = "books-meta";
+const FUNKOS_KEY = "funkos-v1";
 const COVERS_KEY = "covers-v1";
 const WALLET_KEY = "wallet-v1";
-const FUNKOS_KEY = "funkos-v1";
 
 const SITE_ID     = "8049dab7-42eb-410b-b1a8-d96822f0850f"; // gothamlibrary-emefreak-new
 const OLD_SITE_ID = "cc7277d9-b462-412f-b844-12837810a0cc"; // gothamlibrary-old (solo lectura)
@@ -25,7 +27,9 @@ const OLD_SITE_ID = "cc7277d9-b462-412f-b844-12837810a0cc"; // gothamlibrary-old
 const NEW_BASE = `https://api.netlify.com/api/v1/blobs/${SITE_ID}/${encodeURIComponent("site:gotham-library")}`;
 const OLD_BASE = `https://api.netlify.com/api/v1/blobs/${OLD_SITE_ID}/gotham-library`;
 
-const MAX_DROP = 10; // máximo de elementos que se pueden eliminar en un solo guardado
+const MAX_DELETES = 25;                 // borrados permitidos en un solo guardado
+const MAX_LIST_BYTES = 3_000_000;       // una lista ligera pesa KB; más de esto = app antigua
+const TOMBSTONE_DAYS = 60;              // cuánto se recuerda un borrado
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -40,7 +44,7 @@ function token() {
   return t;
 }
 
-// ── Acceso a Blobs como texto (sin parsear) ─────────────────────
+// ── Acceso a Blobs ───────────────────────────────────────────────
 async function getText(base, key) {
   const r = await fetch(`${base}/${key}`, { headers: { Authorization: `Bearer ${token()}` } });
   if (r.status === 404) return null;
@@ -49,20 +53,11 @@ async function getText(base, key) {
   return text ? text : null;
 }
 
-// Bytes tal cual (sin decodificar): para la biblioteca, que pesa varios MB
-async function getBytes(base, key) {
-  const r = await fetch(`${base}/${key}`, { headers: { Authorization: `Bearer ${token()}` } });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`GET ${key} failed: ${r.status}`);
-  const buf = await r.arrayBuffer();
-  return buf.byteLength ? buf : null;
-}
-
-async function putText(key, text) {
+async function putText(key, body) {
   const r = await fetch(`${NEW_BASE}/${key}`, {
     method: "PUT",
     headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-    body: text,
+    body,
   });
   if (!r.ok) throw new Error(`PUT ${key} failed: ${r.status}`);
 }
@@ -76,12 +71,93 @@ async function getTextMigrating(key) {
   return old;
 }
 
-// Para datos pequeños (alcancía, Funkos, portadas antiguas) sí se parsea.
 async function getJSON(key, migrate = true) {
   const t = migrate ? await getTextMigrating(key) : await getText(NEW_BASE, key);
   return t === null ? null : JSON.parse(t);
 }
 const putJSON = (key, value) => putText(key, JSON.stringify(value));
+
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: CORS });
+const raw = (text, status = 200) => new Response(text, { status, headers: CORS });
+
+// ── Mezcla de listas (libros o Funkos) ──────────────────────────
+// body:
+//   { upserts: [...], deletes: [ids] }  → mezcla por elemento (la app nueva)
+//   { replace: [...] }                  → sustituye todo (restaurar un backup)
+//   [ ... ]                              → app antigua: se mezcla como upserts, sin borrar
+async function saveList(key, body) {
+  const metaKey = key + "-meta";
+  const curText = await getTextMigrating(key);
+  const cur = curText ? JSON.parse(curText) : [];
+  const meta = (await getJSON(metaKey, false)) || {};
+  const now = Date.now();
+  const today = new Date(now).toISOString().slice(0, 10);
+
+  // Tombstones: borrados recientes, para que un móvil desactualizado no los resucite
+  const tomb = {};
+  for (const [id, ts] of Object.entries(meta.deleted || {})) {
+    if (now - ts < TOMBSTONE_DAYS * 86400000) tomb[id] = ts;
+  }
+
+  let out;
+  if (body && Array.isArray(body.replace)) {
+    out = body.replace.filter((x) => x && x.id);
+    if (!out.length) return { error: "Restauración bloqueada: la lista llegó vacía", status: 409 };
+  } else {
+    const legacy = Array.isArray(body);
+    const ups = legacy ? body : (Array.isArray(body && body.upserts) ? body.upserts : []);
+    const dels = legacy ? [] : (Array.isArray(body && body.deletes) ? body.deletes : []);
+    if (dels.length > MAX_DELETES) {
+      return { error: `Guardado bloqueado: se intentaban borrar ${dels.length} elementos a la vez`, status: 409 };
+    }
+
+    const byId = new Map(cur.filter((x) => x && x.id).map((x) => [x.id, x]));
+    const fresh = [];
+    for (const u of ups) {
+      if (!u || !u.id) continue;
+      const uts = u.updatedAt || 0;
+      if (tomb[u.id] && uts <= tomb[u.id]) continue;          // se borró después de esta edición
+      const e = byId.get(u.id);
+      if (!e) { fresh.push(u); byId.set(u.id, u); }
+      else if (uts >= (e.updatedAt || 0)) byId.set(u.id, u);   // gana la edición más reciente
+    }
+    for (const id of dels) {
+      if (typeof id !== "string") continue;
+      byId.delete(id);
+      tomb[id] = now;
+    }
+
+    const freshIds = new Set(fresh.map((x) => x.id));
+    out = [
+      ...fresh.filter((x) => byId.has(x.id)).map((x) => byId.get(x.id)),   // nuevos, primero
+      ...cur.filter((x) => x && x.id && byId.has(x.id) && !freshIds.has(x.id)).map((x) => byId.get(x.id)),
+    ];
+    if (!out.length && cur.length > 3) {
+      return { error: "Guardado bloqueado: la lista se quedaría vacía", status: 409 };
+    }
+  }
+
+  if (meta.prevDate !== today && curText) {
+    await putText(key + "-prev", curText);               // copia diaria del estado anterior
+  }
+  const outText = JSON.stringify(out);
+  await putText(key, outText);
+  await putJSON(metaKey, { ...meta, deleted: tomb, count: out.length, updatedAt: now, prevDate: today });
+  return { text: outText };
+}
+
+async function handleListPost(request, key) {
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength > MAX_LIST_BYTES) {
+    return json({ error: "La app está desactualizada: ciérrala del todo y vuelve a abrirla" }, 413);
+  }
+  let body;
+  try { body = JSON.parse(new TextDecoder().decode(buf)); }
+  catch { return json({ error: "Datos no válidos" }, 400); }
+  const res = await saveList(key, body);
+  if (res.error) return json({ error: res.error }, res.status);
+  return raw(res.text);
+}
 
 // Convierte un producto del catálogo (popfigures.com) en datos de Funko
 function parseFunko(p) {
@@ -97,57 +173,36 @@ function parseFunko(p) {
   return { name, number, franchise: (parts[0] || "").trim(), extra: parts.slice(1).join(" · "), image, line: p.product_type || "" };
 }
 
-const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: CORS });
-const raw = (text, status = 200) => new Response(text, { status, headers: CORS });
-
 export default async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
   const path = new URL(request.url).pathname;
 
   try {
-    // ── LIBROS (como texto) ───────────────────────────────────
+    // ── LIBROS ────────────────────────────────────────────────
     if (path === "/api/books" && request.method === "GET") {
       const r = await fetch(`${NEW_BASE}/${BOOKS_KEY}`, { headers: { Authorization: `Bearer ${token()}` } });
-      if (r.ok) return new Response(r.body, { headers: CORS });
+      if (r.ok) return new Response(r.body, { headers: { ...CORS, "Cache-Control": "no-store" } });
       if (r.status !== 404) throw new Error(`GET ${BOOKS_KEY} failed: ${r.status}`);
-      const old = await getBytes(OLD_BASE, BOOKS_KEY);      // primera vez: copiar del sitio antiguo
-      if (!old) return raw("[]");
-      await putText(BOOKS_KEY, old);
-      return new Response(old, { headers: CORS });
+      return raw((await getTextMigrating(BOOKS_KEY)) ?? "[]");
     }
-
     if (path === "/api/books" && request.method === "POST") {
-      const buf = new Uint8Array(await request.arrayBuffer());
-      let i = 0; while (i < buf.length && (buf[i] === 32 || buf[i] === 10 || buf[i] === 13 || buf[i] === 9)) i++;
-      if (buf[i] !== 0x5b) return json({ error: "Expected array" }, 400);   // debe empezar por "["
-
-      // La app envía el número de libros en X-Count. Las versiones antiguas no lo envían:
-      // contarlo leyendo 10 MB supera el límite de CPU, así que en ese caso solo se
-      // comprueba que la lista no venga vacía.
-      const header = parseInt(request.headers.get("x-count") || "", 10);
-      const count = Number.isFinite(header) ? header : null;
-      if (count === 0 || buf.length < 50) return json({ error: "Guardado bloqueado: la lista llegó vacía" }, 409);
-
-      const meta = (await getJSON(META_KEY, false)) || {};
-      if (count !== null && typeof meta.count === "number" && meta.count - count > MAX_DROP) {
-        return json({ error: "Guardado bloqueado: faltarían demasiados libros", existing: meta.count, received: count }, 409);
-      }
-
-      // Copia del estado anterior, una vez al día (sin parsear: texto tal cual)
-      const today = new Date().toISOString().slice(0, 10);
-      if (meta.prevDate !== today) {
-        const prev = await getBytes(NEW_BASE, BOOKS_KEY);
-        if (prev) await putText("books-prev", prev);
-        meta.prevDate = today;
-      }
-
-      await putText(BOOKS_KEY, buf);
-      await putJSON(META_KEY, { ...meta, ...(count !== null ? { count } : {}), updatedAt: Date.now() });
-      return json({ ok: true, count });
+      return await handleListPost(request, BOOKS_KEY);
     }
 
-    // ── PORTADA INDIVIDUAL: /api/cover/<id> ───────────────────
+    // ── FUNKOS ────────────────────────────────────────────────
+    // GET devuelve null si todavía no existe (la app carga entonces la colección inicial)
+    if (path === "/api/funkos" && request.method === "GET") {
+      const r = await fetch(`${NEW_BASE}/${FUNKOS_KEY}`, { headers: { Authorization: `Bearer ${token()}` } });
+      if (r.ok) return new Response(r.body, { headers: { ...CORS, "Cache-Control": "no-store" } });
+      if (r.status !== 404) throw new Error(`GET ${FUNKOS_KEY} failed: ${r.status}`);
+      return raw("null");
+    }
+    if (path === "/api/funkos" && request.method === "POST") {
+      return await handleListPost(request, FUNKOS_KEY);
+    }
+
+    // ── PORTADA / FOTO INDIVIDUAL: /api/cover/<id> ────────────
     const cm = path.match(/^\/api\/cover\/([A-Za-z0-9_-]{1,100})$/);
     if (cm && request.method === "GET") {
       const t = await getText(NEW_BASE, "cover-" + cm[1]);
@@ -169,30 +224,8 @@ export default async (request) => {
     if (path === "/api/covers" && request.method === "GET") {
       return raw((await getTextMigrating(COVERS_KEY)) ?? "{}");
     }
-
     if (path === "/api/covers" && request.method === "POST") {
-      // Obsoleto: las portadas ahora van por /api/cover/<id>. (Fusionar este archivo
-      // de varios MB superaba el límite de CPU.)
-      return json({ ok: true, ignored: true });
-    }
-
-    // ── FUNKOS ────────────────────────────────────────────────
-    // GET devuelve null si todavía no existe (la app carga entonces la colección inicial)
-    if (path === "/api/funkos" && request.method === "GET") {
-      return raw((await getText(NEW_BASE, FUNKOS_KEY)) ?? "null");
-    }
-
-    if (path === "/api/funkos" && request.method === "POST") {
-      const body = await request.json();
-      if (!Array.isArray(body)) return json({ error: "Expected array" }, 400);
-      const prevText = await getText(NEW_BASE, FUNKOS_KEY);
-      const existing = prevText ? JSON.parse(prevText) : [];
-      if (existing.length - body.length > MAX_DROP) {
-        return json({ error: "Guardado bloqueado: faltarían demasiados Funkos", existing: existing.length, received: body.length }, 409);
-      }
-      if (prevText) await putText("funkos-prev", prevText);
-      await putJSON(FUNKOS_KEY, body);
-      return json({ ok: true, count: body.length });
+      return json({ ok: true, ignored: true });   // obsoleto
     }
 
     // ── BUSCADOR DE FUNKOS (catálogo público de popfigures.com) ──
@@ -211,7 +244,6 @@ export default async (request) => {
     if (path === "/api/wallet" && request.method === "GET") {
       return json((await getJSON(WALLET_KEY)) ?? { balance: 0, txs: [] });
     }
-
     if (path === "/api/wallet" && request.method === "POST") {
       const body = await request.json();
       await putJSON(WALLET_KEY, body);
