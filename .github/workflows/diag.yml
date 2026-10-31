@@ -6,6 +6,7 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
+      - run: sleep 75
       - name: Sondear la app (solo lecturas)
         run: |
           set -u
@@ -19,5 +20,5 @@ jobs:
           if [ -n "$C" ]; then R=$(curl -sS -o c.bin -w "%{http_code} %{size_download}B %{content_type} %{time_total}s" "$URL$C"); n COVER "$R"; fi
           S=$(curl -sS -o s.json -w "%{http_code} %{time_total}s" "$URL/api/funko-search?q=batman"); n SEARCH "$S :: $(jq -c 'length' s.json 2>&1|head -c 80)"
           O=$(curl -sS -o /dev/null -D h.txt -w "%{http_code}" -X OPTIONS "$URL/api/books"); n OPTIONS "$O :: $(grep -i 'access-control-allow-headers' h.txt | tr -d '\r')"
-          n INDEXVER "$(grep -c 'externalizeCovers' home.html) externalize · $(grep -c 'X-Count' home.html) xcount · size $(wc -c < home.html)"
+          n INDEXVER "$(grep -c 'makeSync' home.html) makeSync · $(grep -c 'externalizeFunkoPhotos' home.html) funkoPhotos · size $(wc -c < home.html)"
           for i in 1 2 3 4 5; do T=$(curl -sS -o /dev/null -w "%{http_code} %{time_total}s" "$URL/api/books"); echo "books try $i: $T"; done > tries.txt; n TRIES "$(tr '\n' ' ' < tries.txt)"
