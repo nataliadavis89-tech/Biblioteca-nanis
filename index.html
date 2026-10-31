@@ -730,7 +730,31 @@ let _lastPull = 0;
 function pullAll(force){
   if(!force && Date.now() - _lastPull < 15000) return;
   _lastPull = Date.now();
-  booksSync.sync(); funkosSync.sync(); syncWallet();
+  Promise.all([booksSync.sync(), funkosSync.sync()]).then(checkAppUpdate);
+  syncWallet();
+}
+
+// ══ ACTUALIZACIÓN AUTOMÁTICA DE LA APP ══════════════════════════════
+// Si se publica una versión nueva, la app se recarga sola: primero sube lo
+// pendiente y nunca interrumpe mientras se está editando algo.
+let _appTag = null;
+function isEditing(){
+  const add = document.getElementById('add-screen');
+  return (add && add.style.display === 'block') ||
+         !!document.querySelector('#funko-screen.open, .detail-screen.open') ||
+         (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName));
+}
+async function checkAppUpdate(){
+  try{
+    const r = await fetchT('/?v=' + Date.now(), { method: 'HEAD', cache: 'no-store' }, 8000);
+    const tag = r.headers.get('etag') || r.headers.get('last-modified');
+    if(!tag) return;
+    if(!_appTag){ _appTag = tag; return; }
+    if(tag === _appTag || isEditing()) return;
+    if(booksSync.pending() + funkosSync.pending() > 0) return;   // primero que suba lo pendiente
+    showToast('Nueva versión de la app — actualizando…');
+    setTimeout(()=>location.reload(), 900);
+  }catch(e){}
 }
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) pullAll(); });
 window.addEventListener('pageshow', ()=>pullAll());
@@ -2683,6 +2707,7 @@ loadWallet();
   setSyncDot('books','busy');
   await Promise.all([loadBooks(), loadFunkos(), syncWallet()]);
   _lastPull = Date.now();
+  checkAppUpdate();   // recuerda qué versión está abierta
 })();
 
 function showFirebaseSetup(){ /* Firebase removed */ }
