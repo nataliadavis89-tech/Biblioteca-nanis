@@ -860,8 +860,9 @@ function renderFunkoForm(){
       <div style="display:flex;gap:8px;margin:10px 0 18px">
         <label class="fk-btn fk-btn-gold">Cámara<input type="file" accept="image/*" capture="environment" style="display:none" onchange="fkPhoto(this)"></label>
         <label class="fk-btn">Galería<input type="file" accept="image/*" style="display:none" onchange="fkPhoto(this)"></label>
+        <div class="fk-btn" onclick="fkPaste()">Pegar recorte</div>
       </div>
-      <div class="fk-tip">💡 <b>Fondo blanco:</b> en la app Fotos, abre la foto, <b>mantén pulsado el Funko</b> hasta que se ilumine su contorno → <b>Compartir → Guardar imagen</b>. Luego súbela aquí con <b>Galería</b>.</div>
+      <div class="fk-tip">💡 <b>Fondo blanco:</b> en la app Fotos, abre la foto y <b>mantén pulsado el Funko</b> hasta que se ilumine su contorno → <b>Copiar</b>. Vuelve aquí y pulsa <b>Pegar recorte</b>.</div>
       <div style="display:grid;grid-template-columns:1fr 96px;gap:10px">
         <div class="field-group"><div class="field-label">Nombre</div><input class="field-input" value="${esc(f.name)}" placeholder="Ej. Ryuk" oninput="fkField('name',this.value)"></div>
         <div class="field-group"><div class="field-label">Número</div><input class="field-input" inputmode="numeric" value="${esc(f.number)}" placeholder="#" oninput="fkField('number',this.value.replace(/^#/,''))"></div>
@@ -877,6 +878,24 @@ function renderFunkoForm(){
       <button class="save-btn" onclick="submitFunko()">${funkoEditId ? 'Guardar cambios' : 'Guardar en la estantería'}</button>
       ${funkoEditId ? `<button class="fk-del" id="fk-del" onclick="deleteFunko()">Eliminar Funko</button>` : ''}
     </div>`;
+}
+
+async function fkPaste(){
+  try{
+    if(!navigator.clipboard || !navigator.clipboard.read){ showToast('Este navegador no deja pegar imágenes: usa Galería'); return; }
+    const items = await navigator.clipboard.read();
+    for(const it of items){
+      const t = it.types.find(x=>x.startsWith('image/'));
+      if(!t) continue;
+      showToast('Procesando recorte…');
+      const out = await shrinkPhoto(await it.getType(t), 360);
+      if(!out){ showToast('No se pudo leer la imagen copiada'); return; }
+      funkoForm.photo = out.data; renderFunkoForm();
+      showToast(out.cutout ? '✓ Recorte pegado con fondo blanco' : '✓ Imagen pegada (no venía recortada)');
+      return;
+    }
+    showToast('No hay ninguna imagen copiada. En Fotos: mantén pulsado el Funko → Copiar');
+  }catch(e){ showToast('No se pudo pegar. En Fotos: mantén pulsado el Funko → Copiar, y vuelve a intentarlo'); }
 }
 
 function fkPhoto(input){
