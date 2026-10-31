@@ -1,0 +1,23 @@
+name: Diagnóstico
+on:
+  push:
+    branches: [diag-oct]
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sondear la app (solo lecturas)
+        run: |
+          set -u
+          URL=https://gothamlibrary-emefreak-new.netlify.app
+          n(){ echo "::notice title=$1::$2"; }
+          H=$(curl -sS -o home.html -w "%{http_code} %{size_download}B %{time_total}s" "$URL/"); n HOME "$H"
+          B=$(curl -sS -o books.json -w "%{http_code} %{size_download}B %{time_total}s" "$URL/api/books"); n BOOKS "$B :: $(jq -c '{n:length, data_covers:[.[]|select((.cover//"")|startswith("data:"))]|length, api_covers:[.[]|select((.cover//"")|startswith("/api/cover/"))]|length}' books.json 2>&1 | head -c 300)"
+          F=$(curl -sS -o funkos.json -w "%{http_code} %{size_download}B %{time_total}s" "$URL/api/funkos"); n FUNKOS "$F :: $(jq -c 'if type=="array" then {n:length, data_photos:[.[]|select((.photo//"")|startswith("data:"))]|length, photo_bytes:([.[]|(.photo//"")|length]|add)} else . end' funkos.json 2>&1 | head -c 300)"
+          W=$(curl -sS -o wallet.json -w "%{http_code} %{size_download}B" "$URL/api/wallet"); n WALLET "$W :: $(head -c 150 wallet.json)"
+          C=$(jq -r '[.[]|select((.cover//"")|startswith("/api/cover/"))][0].cover // ""' books.json)
+          if [ -n "$C" ]; then R=$(curl -sS -o c.bin -w "%{http_code} %{size_download}B %{content_type} %{time_total}s" "$URL$C"); n COVER "$R"; fi
+          S=$(curl -sS -o s.json -w "%{http_code} %{time_total}s" "$URL/api/funko-search?q=batman"); n SEARCH "$S :: $(jq -c 'length' s.json 2>&1|head -c 80)"
+          O=$(curl -sS -o /dev/null -D h.txt -w "%{http_code}" -X OPTIONS "$URL/api/books"); n OPTIONS "$O :: $(grep -i 'access-control-allow-headers' h.txt | tr -d '\r')"
+          n INDEXVER "$(grep -c 'externalizeCovers' home.html) externalize · $(grep -c 'X-Count' home.html) xcount · size $(wc -c < home.html)"
+          for i in 1 2 3 4 5; do T=$(curl -sS -o /dev/null -w "%{http_code} %{time_total}s" "$URL/api/books"); echo "books try $i: $T"; done > tries.txt; n TRIES "$(tr '\n' ' ' < tries.txt)"
