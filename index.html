@@ -379,6 +379,8 @@ select.field-input option{background:var(--surface)}
 .fk-res-extra{font-size:11px;color:var(--text3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fk-res-msg{font-size:12px;color:var(--text3);padding:6px 2px 10px}
 .fk-res-src{font-size:10px;color:var(--text3);text-align:right;margin:-2px 2px 8px}
+.fk-tip{font-size:12px;line-height:1.45;color:var(--text2);background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:-8px 0 18px}
+.fk-tip b{color:var(--text)}
 .fk-or{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text3);text-align:center;margin:10px 0 14px}
 </style>
 </head>
@@ -859,6 +861,7 @@ function renderFunkoForm(){
         <label class="fk-btn fk-btn-gold">Cámara<input type="file" accept="image/*" capture="environment" style="display:none" onchange="fkPhoto(this)"></label>
         <label class="fk-btn">Galería<input type="file" accept="image/*" style="display:none" onchange="fkPhoto(this)"></label>
       </div>
+      <div class="fk-tip">💡 <b>Fondo blanco:</b> en la app Fotos, abre la foto, <b>mantén pulsado el Funko</b> hasta que se ilumine su contorno → <b>Compartir → Guardar imagen</b>. Luego súbela aquí con <b>Galería</b>.</div>
       <div style="display:grid;grid-template-columns:1fr 96px;gap:10px">
         <div class="field-group"><div class="field-label">Nombre</div><input class="field-input" value="${esc(f.name)}" placeholder="Ej. Ryuk" oninput="fkField('name',this.value)"></div>
         <div class="field-group"><div class="field-label">Número</div><input class="field-input" inputmode="numeric" value="${esc(f.number)}" placeholder="#" oninput="fkField('number',this.value.replace(/^#/,''))"></div>
@@ -880,20 +883,53 @@ function fkPhoto(input){
   setTimeout(async()=>{
     const file = input && input.files && input.files[0]; if(!file) return;
     showToast('Procesando foto…');
-    const data = await shrinkPhoto(file, 360);
-    if(!data){ showToast('No se pudo leer la foto'); return; }
-    funkoForm.photo = data; renderFunkoForm(); showToast('✓ Foto lista');
+    const out = await shrinkPhoto(file, 360);
+    if(!out){ showToast('No se pudo leer la foto'); return; }
+    funkoForm.photo = out.data; renderFunkoForm();
+    showToast(out.cutout ? '✓ Foto lista con fondo blanco' : '✓ Foto lista · para fondo blanco, súbela recortada (ver consejo)');
   }, 100);
 }
 
+// Prepara la foto de un Funko: fondo blanco (nunca negro) y, si la foto viene
+// recortada (sin fondo, p. ej. "Copiar sujeto" del iPhone), centra la figura.
 function shrinkPhoto(file, MAX){
   return new Promise(res=>{
     const url = URL.createObjectURL(file); const img = new Image();
     img.onload = ()=>{
-      let w = img.naturalWidth, h = img.naturalHeight; const r = Math.min(1, MAX/Math.max(w,h)); w = Math.round(w*r); h = Math.round(h*r);
-      const c = document.createElement('canvas'); c.width = w; c.height = h;
-      c.getContext('2d').drawImage(img, 0, 0, w, h); URL.revokeObjectURL(url);
-      try{ res(c.toDataURL('image/jpeg', 0.72)); }catch(e){ res(null); }
+      URL.revokeObjectURL(url);
+      try{
+        // 1) Leer la imagen a tamaño manejable, conservando la transparencia
+        let w = img.naturalWidth, h = img.naturalHeight;
+        const r0 = Math.min(1, 900/Math.max(w,h)); w = Math.round(w*r0); h = Math.round(h*r0);
+        const a = document.createElement('canvas'); a.width = w; a.height = h;
+        const ax = a.getContext('2d'); ax.drawImage(img, 0, 0, w, h);
+        const px = ax.getImageData(0, 0, w, h).data;
+        // 2) ¿Tiene fondo transparente? Calcular el recuadro de la figura
+        let clear = 0, x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for(let y = 0; y < h; y++) for(let x = 0; x < w; x++){
+          const al = px[(y*w + x)*4 + 3];
+          if(al < 250) clear++;
+          if(al > 16){ if(x < x0) x0 = x; if(x > x1) x1 = x; if(y < y0) y0 = y; if(y > y1) y1 = y; }
+        }
+        const cutout = clear > w*h*0.02 && x1 > x0 && y1 > y0;
+        // 3) Componer sobre blanco
+        let c;
+        if(cutout){
+          const OH = MAX, OW = Math.round(MAX*0.86), pad = 0.08;           // proporción de la balda
+          const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+          const k = Math.min(OW*(1-2*pad)/bw, OH*(1-2*pad)/bh);
+          const dw = Math.round(bw*k), dh = Math.round(bh*k);
+          c = document.createElement('canvas'); c.width = OW; c.height = OH;
+          const cx = c.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, OW, OH);
+          cx.drawImage(a, x0, y0, bw, bh, Math.round((OW-dw)/2), Math.round((OH-dh)/2), dw, dh);
+        }else{
+          const r = Math.min(1, MAX/Math.max(w,h)); const ow = Math.round(w*r), oh = Math.round(h*r);
+          c = document.createElement('canvas'); c.width = ow; c.height = oh;
+          const cx = c.getContext('2d'); cx.fillStyle = '#ffffff'; cx.fillRect(0, 0, ow, oh);
+          cx.drawImage(a, 0, 0, ow, oh);
+        }
+        res({ data: c.toDataURL('image/jpeg', 0.8), cutout });
+      }catch(e){ res(null); }
     };
     img.onerror = ()=>{ URL.revokeObjectURL(url); res(null); };
     img.src = url;
